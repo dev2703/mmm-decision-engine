@@ -1,0 +1,37 @@
+# Keep research notes locally. Only the root README is intended for Git.
+*PLAN.md
+*plan.md
+
+# Local credentials and private configuration.
+.env
+.env.*
+*.env
+*.env.*
+.secrets/
+.credentials/
+credentials.json
+*credentials*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.token
+*.secret
+
+# Virtual environments, local service state, and caches.
+.venv/
+venv/
+env/
+ENV/
+*.venv/
+.cache/
+.huggingface/
+.modal/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.py[oc]
+ssh
