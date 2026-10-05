@@ -35,3 +35,4 @@ ENV/
 __pycache__/
 *.py[oc]
 ssh
+docs/
