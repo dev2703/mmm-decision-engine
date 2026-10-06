@@ -648,6 +648,13 @@ model uncertainty changes what the optimizer is allowed to recommend.
 
 Phase 7 — FastAPI + PostgreSQL
 
+Status: in progress. Project/dataset and experiment/model-run tables have real
+PostgreSQL migrations and HTTP contracts. Quality evidence is checksum-verified;
+registered heavy training executes through the CLI with transactional job claims.
+Executed PostgreSQL tests include migration round trips, ORM/schema consistency,
+persistence, rollback, duplicate workers, failures and real small Bayesian training.
+Evaluation/scenario/optimization persistence and their API contracts remain next.
+
 Objective
 
 Turn scientific code into a product backend.

@@ -2,7 +2,9 @@
 
 import argparse
 import json
+from dataclasses import fields
 from pathlib import Path
+from uuid import UUID
 
 
 def main() -> None:
@@ -83,18 +85,20 @@ def main() -> None:
     training = commands.add_parser(
         "train", help="Fit and audit a Bayesian MMM candidate"
     )
-    training.add_argument("--dataset", type=Path, required=True)
-    training.add_argument("--output", type=Path, required=True)
-    training.add_argument("--draws", type=int, default=2000)
-    training.add_argument("--tune", type=int, default=1500)
-    training.add_argument("--chains", type=int, default=4)
-    training.add_argument("--seed", type=int, default=42)
-    training.add_argument("--holdout", type=int, default=13)
-    training.add_argument("--target-accept", type=float, default=0.99)
-    training.add_argument("--adstock-lags", type=int, default=16)
-    training.add_argument("--max-tree-depth", type=int, default=12)
-    training.add_argument("--media-prior-mean", type=float, default=0.15)
-    training.add_argument("--media-prior-sigma", type=float, default=0.1)
+    training_source = training.add_mutually_exclusive_group(required=True)
+    training_source.add_argument("--dataset", type=Path)
+    training_source.add_argument("--experiment-id", type=UUID)
+    training.add_argument("--output", type=Path)
+    training.add_argument("--draws", type=int)
+    training.add_argument("--tune", type=int)
+    training.add_argument("--chains", type=int)
+    training.add_argument("--seed", type=int)
+    training.add_argument("--holdout", type=int)
+    training.add_argument("--target-accept", type=float)
+    training.add_argument("--adstock-lags", type=int)
+    training.add_argument("--max-tree-depth", type=int)
+    training.add_argument("--media-prior-mean", type=float)
+    training.add_argument("--media-prior-sigma", type=float)
     for command in (prepare, imported):
         command.add_argument("--output", type=Path, required=True)
         command.add_argument("--as-of")
@@ -136,24 +140,30 @@ def main() -> None:
             print(json.dumps(record["policy"]))
             return
         if args.command == "train":
-            from decisionguard.models.bayesian import MMMConfig, train_mmm
+            from decisionguard.models.config import MMMConfig
 
-            record = train_mmm(
-                args.dataset,
-                args.output,
-                MMMConfig(
-                    draws=args.draws,
-                    tune=args.tune,
-                    chains=args.chains,
-                    seed=args.seed,
-                    holdout=args.holdout,
-                    target_accept=args.target_accept,
-                    adstock_lags=args.adstock_lags,
-                    max_tree_depth=args.max_tree_depth,
-                    media_prior_mean=args.media_prior_mean,
-                    media_prior_sigma=args.media_prior_sigma,
-                ),
-            )
+            overrides = {
+                field.name: getattr(args, field.name)
+                for field in fields(MMMConfig)
+                if hasattr(args, field.name) and getattr(args, field.name) is not None
+            }
+            if args.experiment_id is not None:
+                from decisionguard.api.jobs import train_experiment
+                from decisionguard.config import Settings
+
+                if args.output is not None or overrides:
+                    raise ValueError(
+                        "registered training uses its stored configuration"
+                    )
+                record = train_experiment(
+                    args.experiment_id, Settings.from_environment()
+                )
+            else:
+                from decisionguard.models.bayesian import train_mmm
+
+                if args.output is None:
+                    raise ValueError("--output is required for dataset training")
+                record = train_mmm(args.dataset, args.output, MMMConfig(**overrides))
             print(
                 json.dumps(
                     {

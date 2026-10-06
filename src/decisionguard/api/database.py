@@ -52,3 +52,51 @@ class Dataset(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class Experiment(Base):
+    __tablename__ = "experiments"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), index=True
+    )
+    dataset_id: Mapped[UUID] = mapped_column(
+        ForeignKey("datasets.id", ondelete="RESTRICT")
+    )
+    hypothesis: Mapped[str]
+    model_family: Mapped[str]
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ModelRun(Base):
+    __tablename__ = "model_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED')"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    experiment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("experiments.id", ondelete="RESTRICT"), index=True
+    )
+    dataset_id: Mapped[UUID] = mapped_column(
+        ForeignKey("datasets.id", ondelete="RESTRICT")
+    )
+    model_family: Mapped[str]
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    artifact_uri: Mapped[str] = mapped_column(unique=True)
+    status: Mapped[str]
+    model_status: Mapped[str]
+    code_version: Mapped[str | None]
+    record_hash: Mapped[str | None]
+    training_window: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    metrics: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    error_type: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

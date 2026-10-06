@@ -255,3 +255,58 @@ versions or sampling settings require a new output directory. A completed
 `evaluation.json` prevents overwriting. Failed tests are retried rather than cached
 as successes. Stop the original worker before resuming; concurrent writers to one
 run directory are unsupported.
+
+## Posterior decision analysis
+
+`decisionguard optimize --model-run artifacts/mmm --evaluation artifacts/evaluation
+--constraints constraints.json --output artifacts/optimization` accepts a JSON
+object with `total` (AUD/week), `current` (each model channel), and optional
+`floors`, `caps`, `protected_spend` (AUD/week) and `max_movement` (relative fractions).
+For example, `0.1` allows 10% movement around current spend. Source restrictions
+can tighten that limit. `--horizon 13 --draws 200 --seed 42` are defaults.
+
+BLOCK models are rejected before solving. Otherwise the result preserves joint
+posterior allocations, expected/conservative alternatives, conditional modeled
+media revenue, downside, stability and historical-support warnings. An unstable
+or extrapolated candidate cannot authorize a recommendation. This command analyzes
+plans; it does not change spend in an advertising account.
+
+## Local PostgreSQL API
+
+Provide `DATABASE_URL=postgresql+psycopg://USER:PASSWORD@localhost/decisionguard`
+and optionally `ARTIFACT_ROOT=/absolute/path/to/artifacts`. Then:
+
+```sh
+uv run alembic upgrade head
+uv run uvicorn decisionguard.api.app:create_app --factory --host 127.0.0.1
+```
+
+Open `/docs` for the typed API. Projects and generated datasets persist in
+PostgreSQL; their quality endpoint verifies immutable artifact checksums. The
+current slice supports project creation/retrieval, dataset generation and quality
+evidence. Further model/job/scenario endpoints are still being implemented.
+This local single-user API does not yet provide authentication.
+
+Real PostgreSQL integration tests use an isolated schema per test and require a
+dedicated database whose name ends in `_test`:
+
+```sh
+DECISIONGUARD_TEST_DATABASE_URL=postgresql+psycopg://USER:PASSWORD@localhost/decisionguard_test uv run pytest tests/test_api.py
+```
+
+Tests skip with an explicit reason when that variable is absent. SQLite is not
+used as a substitute for PostgreSQL migration, JSONB or transaction verification.
+
+Registered Bayesian training runs are queued through `POST /experiments/{id}/run`
+after creating an experiment with `POST /projects/{id}/experiments`. Its dataset
+and scientific configuration are snapshots. Run the queued job outside HTTP:
+
+```sh
+uv run decisionguard train --experiment-id EXPERIMENT_UUID
+```
+
+Do not combine registered training with dataset/output or sampler overrides.
+Use `GET /model-runs/{id}` or `GET /projects/{id}/model-runs` to inspect lifecycle
+and evidence. A successful job remains an unevaluated candidate; job success is
+not scientific release. A crashed process may leave RUNNING metadata; current
+recovery is an explicit operator task, never automatic duplicate execution.

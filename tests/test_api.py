@@ -57,6 +57,7 @@ def test_migrations_round_trip_on_postgresql(database: Settings) -> None:
     command.downgrade(configuration, "base")
     assert "projects" not in inspect(engine).get_table_names()
     command.upgrade(configuration, "head")
+    command.check(configuration)
     assert "datasets" in inspect(engine).get_table_names()
     engine.dispose()
 
@@ -149,3 +150,151 @@ def test_artifact_path_rejects_escape_and_symlink(tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="escapes"):
             artifact_path(root, uri)
     assert artifact_path(root, "projects/data") == root / "projects/data"
+
+
+def queued_experiment(client: TestClient, *, weeks: int = 78) -> tuple[str, str, str]:
+    project_id = client.post("/projects", json={"name": "MMM experiment"}).json()["id"]
+    dataset = client.post(
+        f"/projects/{project_id}/datasets/generate", json={"weeks": weeks}
+    ).json()
+    experiment = client.post(
+        f"/projects/{project_id}/experiments",
+        json={
+            "hypothesis": "Fast serialization smoke; cannot justify release",
+            "configuration": {
+                "draws": 8,
+                "tune": 16,
+                "chains": 1,
+                "channels": ["search_spend"],
+            },
+        },
+    )
+    assert experiment.status_code == 201, experiment.text
+    experiment_id = experiment.json()["id"]
+    run = client.post(f"/experiments/{experiment_id}/run")
+    assert run.status_code == 202, run.text
+    assert run.json()["status"] == "QUEUED"
+    assert run.json()["dataset_id"] == dataset["id"]
+    return project_id, experiment_id, run.json()["id"]
+
+
+def test_queued_runs_snapshot_data_and_validate_configuration(
+    database: Settings,
+) -> None:
+    with TestClient(create_app(database)) as client:
+        project_id, experiment_id, run_id = queued_experiment(client)
+        assert client.post(f"/experiments/{experiment_id}/run").status_code == 409
+        old = client.get(f"/model-runs/{run_id}").json()
+        client.post(f"/projects/{project_id}/datasets/generate", json={"seed": 123})
+        assert (
+            client.get(f"/model-runs/{run_id}").json()["dataset_id"]
+            == old["dataset_id"]
+        )
+        assert len(client.get(f"/projects/{project_id}/model-runs").json()) == 1
+        for configuration in (
+            {"draws": 0},
+            {"draws": 1000000},
+            {"channels": ["unknown"]},
+            {"run_shell": True},
+        ):
+            assert (
+                client.post(
+                    f"/projects/{project_id}/experiments",
+                    json={"hypothesis": "Invalid", "configuration": configuration},
+                ).status_code
+                == 422
+            )
+        other = client.post("/projects", json={"name": "Other"}).json()["id"]
+        assert (
+            client.post(
+                f"/projects/{other}/experiments",
+                json={
+                    "hypothesis": "No cross-project data",
+                    "dataset_id": old["dataset_id"],
+                },
+            ).status_code
+            == 409
+        )
+
+
+@pytest.mark.scientific
+def test_real_registered_training_publishes_checked_candidate(
+    database: Settings,
+) -> None:
+    from decisionguard.api.jobs import train_experiment
+
+    with TestClient(create_app(database)) as client:
+        _, experiment_id, run_id = queued_experiment(client)
+        result = train_experiment(UUID(experiment_id), database)
+        assert result["diagnostics"]["diagnostic_status"] == "INCOMPLETE"
+        stored = client.get(f"/model-runs/{run_id}").json()
+        assert stored["status"] == "SUCCEEDED"
+        assert stored["model_status"] == "CANDIDATE_UNEVALUATED"
+        assert stored["training_window"]["rows"] == 65
+        assert stored["code_version"] == result["code_hash"]
+        assert stored["finished_at"] is not None
+        with pytest.raises(ValueError, match="no queued"):
+            train_experiment(UUID(experiment_id), database)
+
+
+def test_failed_registered_training_cannot_publish_candidate(
+    database: Settings,
+) -> None:
+    from decisionguard.api.jobs import train_experiment
+
+    with TestClient(create_app(database)) as client:
+        project_id, experiment_id, run_id = queued_experiment(client)
+        dataset_id = client.get(f"/projects/{project_id}").json()["current_dataset_id"]
+        engine = create_engine(database.database_url)
+        with Session(engine) as session:
+            dataset = session.get(Dataset, UUID(dataset_id))
+            assert dataset is not None
+            (
+                artifact_path(database.artifact_root, dataset.artifact_uri)
+                / "raw.parquet"
+            ).write_bytes(b"corrupted")
+        with pytest.raises(ValueError, match="hash mismatch"):
+            train_experiment(UUID(experiment_id), database)
+        stored = client.get(f"/model-runs/{run_id}").json()
+        assert stored["status"] == "FAILED"
+        assert stored["model_status"] == "PENDING"
+        assert stored["metrics"] is None
+        assert stored["error_type"] == "ValueError"
+        engine.dispose()
+
+
+def test_second_worker_cannot_claim_running_job(
+    database: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from typing import Any
+
+    from decisionguard.api.jobs import train_experiment
+    from decisionguard.models import bayesian
+
+    started, release = Event(), Event()
+
+    def blocked_fit(*args: Any, **kwargs: Any) -> Any:
+        started.set()
+        assert release.wait(10), "test did not release blocked fit"
+        raise ValueError("deliberate unit-test worker failure")
+
+    monkeypatch.setattr(bayesian, "train_mmm", blocked_fit)
+    with (
+        TestClient(create_app(database)) as client,
+        ThreadPoolExecutor(max_workers=1) as workers,
+    ):
+        _, experiment_id, run_id = queued_experiment(client)
+        future = workers.submit(train_experiment, UUID(experiment_id), database)
+        try:
+            assert started.wait(10)
+            assert client.get(f"/model-runs/{run_id}").json()["status"] == "RUNNING"
+            with pytest.raises(ValueError, match="no queued"):
+                train_experiment(UUID(experiment_id), database)
+        finally:
+            release.set()
+        with pytest.raises(ValueError, match="deliberate unit-test"):
+            future.result(timeout=10)
+        assert client.get(f"/model-runs/{run_id}").json()["status"] == "FAILED"

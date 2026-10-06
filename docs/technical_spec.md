@@ -1697,3 +1697,60 @@ downside, input immutability and analytical-gradient finite differences. Twenty
 joint states loaded from the actual reviewed candidate gave finite original-unit
 planning responses. That candidate remains unreleased pending its production
 external evaluation; numerical feasibility does not override release evidence.
+
+### Phase 7 initial persistence boundary
+
+Start with projects and immutable generated datasets, using SQLAlchemy 2 sessions
+directly from synchronous FastAPI endpoints. `sessionmaker.begin()` commits on
+successful exit and rolls back exceptions, as specified in the
+[SQLAlchemy session documentation](https://docs.sqlalchemy.org/en/20/orm/session_basics.html).
+Lock a project row while assigning its next dataset version; enforce project/version
+uniqueness and quality/date invariants in PostgreSQL. Alembic owns schema changes;
+application startup does not create tables. Explicit settings require the psycopg
+PostgreSQL URL and a local artifact root.
+
+Artifacts use server-generated relative UUID paths with root/symlink containment
+checks. PostgreSQL stores metadata and small JSONB evidence, not posterior arrays.
+Shared CLI/API simulation persistence retains separate truth artifacts and hashes;
+quality inspection can expose BLOCKER evidence without authorizing modeling.
+The quality endpoint verifies files against provenance and persisted metadata.
+Filesystem writes and a database commit cannot form one transaction: a failed
+commit can leave inspectable orphan artifacts, but must not publish a partial
+dataset row. Backend worker/reconciliation work must preserve that distinction.
+
+The currently installed Starlette test client prefers httpx2 and uses its types,
+while its fallback httpx path emitted deprecation warnings and lost strict typing.
+Use its supported client rather than adding typing suppressions or pinning an old
+framework solely for tests; see [Starlette TestClient](https://starlette.dev/testclient/).
+The first actual PostgreSQL/API tests also exposed date-valued generation config
+that JSONB cannot serialize directly; persist the same JSON configuration already
+written by the shared artifact workflow.
+
+This is currently a local single-user API. Authentication, shared-store ownership,
+worker claims, bounded heavy jobs and deployment remain subsequent work; do not
+expose the local service publicly before those boundaries are completed.
+
+### Phase 7 registered model jobs
+
+Experiments snapshot a project-owned dataset, hypothesis and validated MMM config.
+Model-run requests queue immutable input/configuration references. The CLI claims
+a QUEUED run in a short `FOR UPDATE SKIP LOCKED` transaction, closes the transaction
+before sampling, verifies input identity, and publishes only checksum-verified
+completion evidence in a second transaction. Duplicate active runs for one
+experiment are rejected under an experiment-row lock. This uses PostgreSQL and
+existing CLI execution, without Celery/Redis or a speculative workflow framework.
+
+Separate job lifecycle from scientific status: SUCCEEDED means artifacts were
+produced, while CANDIDATE_UNEVALUATED still forbids budget recommendations. Failures
+retain their type and transition to FAILED without results. Process death can leave
+RUNNING; recovery needs operator confirmation that the old worker stopped. Never
+blindly reclaim a possibly live scientific job. A database failure during publication
+can leave complete but unpublished artifacts; reconciliation must verify manifests.
+
+Configuration validation now lives separately from the Bayesian runtime, allowing
+HTTP to validate requests without importing PyMC. Actual fresh-process verification
+found neither PyMC nor sklearn imported at API construction. Sampling has explicit
+local request limits; each request gets a generated correlation ID and structured
+operation/status/duration logs without request bodies or credentials. PostgreSQL
+integration checks exercise snapshot isolation, duplicate claims, rollback/failure
+and a real one-chain training smoke whose diagnostics remain INCOMPLETE.

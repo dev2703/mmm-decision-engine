@@ -1,10 +1,13 @@
 """Synchronous metadata/data endpoints; Bayesian jobs stay outside HTTP workers."""
 
-from collections.abc import AsyncIterator
+import json
+import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -14,7 +17,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from starlette.responses import Response
 
-from decisionguard.api.database import Dataset, Project
+from decisionguard.api.database import Dataset, Experiment, ModelRun, Project
 from decisionguard.config import Settings
 
 
@@ -54,6 +57,44 @@ class DatasetView(BaseModel):
     created_at: datetime
 
 
+class ExperimentCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dataset_id: UUID | None = None
+    hypothesis: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)
+    ]
+    configuration: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExperimentView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    project_id: UUID
+    dataset_id: UUID
+    hypothesis: str
+    model_family: str
+    configuration: dict[str, Any]
+    created_at: datetime
+
+
+class ModelRunView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    experiment_id: UUID
+    dataset_id: UUID
+    model_family: str
+    configuration: dict[str, Any]
+    status: str
+    model_status: str
+    code_version: str | None
+    training_window: dict[str, Any] | None
+    metrics: dict[str, Any] | None
+    error_type: str | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
 def artifact_path(root: Path, uri: str) -> Path:
     path = (root / uri).resolve()
     if Path(uri).is_absolute() or not path.is_relative_to(root.resolve()):
@@ -68,7 +109,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     root = settings.artifact_root
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
         yield
         engine.dispose()
 
@@ -78,8 +119,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def correlation(request: Request, call_next: Any) -> Response:
         # Generate our own IDs: untrusted headers cannot inject logs or traces.
         request.state.correlation_id = str(uuid4())
+        started = perf_counter()
         response: Response = await call_next(request)
         response.headers["X-Correlation-ID"] = request.state.correlation_id
+        route = request.scope.get("route")
+        logging.getLogger("decisionguard.api").info(
+            json.dumps(
+                {
+                    "correlation_id": request.state.correlation_id,
+                    "method": request.method,
+                    "operation": getattr(route, "path", "unmatched"),
+                    "status": response.status_code,
+                    "duration_seconds": perf_counter() - started,
+                }
+            )
+        )
         return response
 
     @app.get("/health")
@@ -157,7 +211,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 date_end=end.date(),
                 hash=quality["clean_hash"],
                 quality_status=quality["status"],
-                configuration=asdict(generating),
+                configuration=json.loads((output / "generation.json").read_text())[
+                    "generation"
+                ],
                 quality=quality,
             )
             session.add(dataset)
@@ -182,5 +238,110 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     409, "Dataset artifact integrity check failed"
                 ) from error
             return quality
+
+    @app.post(
+        "/projects/{project_id}/experiments",
+        response_model=ExperimentView,
+        status_code=201,
+    )
+    def create_experiment(project_id: UUID, body: ExperimentCreate) -> ExperimentView:
+        from decisionguard.models.config import MMMConfig
+
+        try:
+            config = MMMConfig(**body.configuration)
+            if (
+                config.draws > 10000
+                or config.tune > 20000
+                or config.chains > 8
+                or config.max_tree_depth > 16
+                or config.adstock_lags > 52
+            ):
+                raise ValueError("sampling request exceeds local job limits")
+        except (TypeError, ValueError) as error:
+            raise HTTPException(422, str(error)) from error
+        with sessions.begin() as session:
+            project = session.get(Project, project_id)
+            if project is None:
+                raise HTTPException(404, "Project not found")
+            dataset = (
+                session.get(Dataset, body.dataset_id or project.current_dataset_id)
+                if body.dataset_id or project.current_dataset_id
+                else None
+            )
+            if dataset is None or dataset.project_id != project_id:
+                raise HTTPException(409, "Select a dataset belonging to this project")
+            if dataset.quality_status not in ("RESOLVED", "WARNING"):
+                raise HTTPException(409, "Data quality blocks experimentation")
+            if (
+                config.holdout
+                > (dataset.date_end - dataset.date_start).days // 7 + 1 - 52
+            ):
+                raise HTTPException(422, "Holdout leaves fewer than 52 training weeks")
+            experiment = Experiment(
+                project_id=project_id,
+                dataset_id=dataset.id,
+                hypothesis=body.hypothesis,
+                model_family="pymc_marketing_mmm",
+                configuration=asdict(config),
+            )
+            session.add(experiment)
+            session.flush()
+            return ExperimentView.model_validate(experiment)
+
+    @app.post(
+        "/experiments/{experiment_id}/run", response_model=ModelRunView, status_code=202
+    )
+    def queue_model(experiment_id: UUID) -> ModelRunView:
+        with sessions.begin() as session:
+            experiment = session.scalar(
+                select(Experiment)
+                .where(Experiment.id == experiment_id)
+                .with_for_update()
+            )
+            if experiment is None:
+                raise HTTPException(404, "Experiment not found")
+            active = session.scalar(
+                select(ModelRun.id).where(
+                    ModelRun.experiment_id == experiment_id,
+                    ModelRun.status.in_(["QUEUED", "RUNNING"]),
+                )
+            )
+            if active is not None:
+                raise HTTPException(409, "Experiment already has an active model run")
+            identifier = uuid4()
+            run = ModelRun(
+                id=identifier,
+                experiment_id=experiment_id,
+                dataset_id=experiment.dataset_id,
+                model_family=experiment.model_family,
+                configuration=dict(experiment.configuration),
+                artifact_uri=f"projects/{experiment.project_id}/model-runs/{identifier}",
+                status="QUEUED",
+                model_status="PENDING",
+            )
+            session.add(run)
+            session.flush()
+            return ModelRunView.model_validate(run)
+
+    @app.get("/model-runs/{model_run_id}", response_model=ModelRunView)
+    def get_model(model_run_id: UUID) -> ModelRunView:
+        with sessions() as session:
+            run = session.get(ModelRun, model_run_id)
+            if run is None:
+                raise HTTPException(404, "Model run not found")
+            return ModelRunView.model_validate(run)
+
+    @app.get("/projects/{project_id}/model-runs", response_model=list[ModelRunView])
+    def list_models(project_id: UUID) -> list[ModelRunView]:
+        with sessions() as session:
+            if session.get(Project, project_id) is None:
+                raise HTTPException(404, "Project not found")
+            runs = session.scalars(
+                select(ModelRun)
+                .join(Experiment, ModelRun.experiment_id == Experiment.id)
+                .where(Experiment.project_id == project_id)
+                .order_by(ModelRun.created_at.desc())
+            )
+            return [ModelRunView.model_validate(run) for run in runs]
 
     return app
