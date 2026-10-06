@@ -9,11 +9,6 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
 
-# TensorFlow must load before pandas/PyArrow in this isolated evaluation process.
-import tensorflow as _tensorflow  # noqa: F401  # pyright: ignore[reportMissingImports, reportMissingTypeStubs]
-
-# isort: split
-
 import numpy as np
 import pandas as pd
 from mmm_eval.adapters.pymc import (  # pyright: ignore[reportMissingImports, reportMissingTypeStubs]
