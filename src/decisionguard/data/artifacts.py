@@ -23,6 +23,16 @@ def write_json(path: Path, value: object) -> None:
     )
 
 
+def source_code_hash() -> str:
+    """Identify the exact package source used for a data or experiment run."""
+    package = Path(__file__).resolve().parent.parent
+    code = sha256()
+    for path in sorted(package.rglob("*.py")):
+        code.update(str(path.relative_to(package)).encode())
+        code.update(path.read_bytes())
+    return code.hexdigest()
+
+
 def write_dataset(
     raw: pd.DataFrame,
     output: Path,
@@ -36,14 +46,9 @@ def write_dataset(
     raw.to_parquet(output / "raw.parquet", index=False)
     result.clean.to_parquet(output / "clean.parquet", index=False)
     write_json(output / "quality.json", asdict(result.report))
-    package = Path(__file__).resolve().parent.parent
-    code = sha256()
-    for path in sorted(package.rglob("*.py")):
-        code.update(str(path.relative_to(package)).encode())
-        code.update(path.read_bytes())
     provenance = {
         "simulation": simulation,
-        "code_hash": code.hexdigest(),
+        "code_hash": source_code_hash(),
         "artifacts": {
             name: sha256((output / name).read_bytes()).hexdigest()
             for name in ("raw.parquet", "clean.parquet", "quality.json")

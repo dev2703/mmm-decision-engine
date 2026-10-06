@@ -4,8 +4,8 @@ Marketing mix model decision support: evaluate whether model evidence justifies
 a budget recommendation, then propagate uncertainty into constrained decisions.
 
 Phases 1 (synthetic marketing world) and 2 (data integrity) are implemented.
-The next roadmap phase is baselines and experiment discipline; modeling has not
-been implemented yet.
+Phase 3 has started with temporal validation and a seasonal-naive baseline.
+The classical, linear, nonlinear, and Bayesian models remain subsequent work.
 
 ## Local setup
 
@@ -151,3 +151,32 @@ This checks artifact hashes and rejects blocked quality status. Warnings retain
 commercial outliers and suspected structural shifts for investigation. No learned
 imputers, scalers, encoders, or outlier-removal thresholds are fitted in Phase 2.
 See the [technical spec](docs/technical_spec.md) for the data contract and rationale.
+
+## Evaluate the forecasting baseline
+
+Use a model-ready dataset directory and a new experiment directory:
+
+```sh
+uv run decisionguard baseline --dataset artifacts/demo \
+  --output artifacts/baseline-demo
+```
+
+Defaults use a 52-week season, at least 52 training weeks, and 13-week forecast
+windows. Expanding-window CV runs before an independent final 13-week holdout.
+`--period`, `--initial-train`, `--horizon`, and `--gap` configure the experiment;
+`--hypothesis` supplies a hypothesis for its record. No hyperparameters are tuned.
+
+`predictions.parquet` records actual/predicted revenue, residuals, dates, and fold
+IDs. `experiment.json` records metrics, train/test boundaries, availability,
+configuration, dataset/source hashes, hypothesis, interpretation, and limitations.
+MAE/RMSE are AUD/week; WAPE is a fraction and is null if all actual values are zero.
+
+Training records must be available by each forecast origin. With the simulation's
+14-day late-arrival delay, `--gap 2` withholds the two latest training weeks and
+advances forecasts across that gap. Insufficient history or missing weeks fail
+explicitly. Data-quality blockers and artifact changes are rejected before a run.
+
+The baseline is `PREDICTIVE_ONLY`: it supplies a forecast-error reference, without
+uncertainty intervals, attribution, ROI, or budget recommendations. Remaining
+Phase 3 work is the model ladder, fold-fitted preprocessing/feature engineering,
+and comparisons that explain the value of data quality and model complexity.

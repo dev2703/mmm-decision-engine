@@ -286,6 +286,12 @@ A single command creates an auditable cleaned dataset.
 
 Phase 3 — Baselines and Experiment Framework
 
+Status: in progress. Seasonal-naive forecasts, chronological expanding-window CV,
+a final holdout, availability-aware gap checks, deterministic metrics, and auditable
+experiment records are implemented. ARIMA/ETS, raw/domain-engineered linear models,
+Histogram Gradient Boosting, fold-fitted preprocessing, and comparison experiments
+remain. This phase has not met its exit criteria yet.
+
 Objective
 
 Build scientific experimentation discipline.

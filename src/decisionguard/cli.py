@@ -12,6 +12,7 @@ from decisionguard.data.artifacts import write_dataset, write_json
 from decisionguard.data.corruption import CorruptionConfig, corrupt_dataset
 from decisionguard.data.integrity import IntegrityConfig
 from decisionguard.data.synthetic import SyntheticConfig, generate_dataset
+from decisionguard.experiments.baseline import BaselineConfig, run_baseline
 
 
 def main() -> None:
@@ -45,6 +46,16 @@ def main() -> None:
     imported.add_argument("input", type=Path)
     imported.add_argument("--expected-start")
     imported.add_argument("--expected-end")
+    baseline = commands.add_parser(
+        "baseline", help="Evaluate seasonal-naive temporal forecasts"
+    )
+    baseline.add_argument("--dataset", type=Path, required=True)
+    baseline.add_argument("--output", type=Path, required=True)
+    baseline.add_argument("--period", type=int, default=52)
+    baseline.add_argument("--initial-train", type=int, default=52)
+    baseline.add_argument("--horizon", type=int, default=13)
+    baseline.add_argument("--gap", type=int, default=0)
+    baseline.add_argument("--hypothesis")
     for command in (prepare, imported):
         command.add_argument("--output", type=Path, required=True)
         command.add_argument("--as-of")
@@ -56,6 +67,22 @@ def main() -> None:
         )
     args = parser.parse_args()
     try:
+        if args.command == "baseline":
+            result = run_baseline(
+                args.dataset,
+                args.output,
+                BaselineConfig(
+                    period=args.period,
+                    initial_train=args.initial_train,
+                    horizon=args.horizon,
+                    gap=args.gap,
+                ),
+                hypothesis=args.hypothesis,
+            )
+            print(
+                json.dumps({"cv": result.cv_metrics, "holdout": result.holdout_metrics})
+            )
+            return
         rates: list[tuple[str, float]] = []
         for text in args.currency_rate:
             currency, factor = text.split("=", 1)
