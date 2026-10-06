@@ -1,0 +1,54 @@
+"""PostgreSQL metadata; large scientific arrays remain immutable artifacts."""
+
+from datetime import date, datetime
+from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    name: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    current_dataset_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("datasets.id", ondelete="SET NULL", use_alter=True)
+    )
+
+
+class Dataset(Base):
+    __tablename__ = "datasets"
+    __table_args__ = (
+        UniqueConstraint("project_id", "version"),
+        CheckConstraint("version > 0"),
+        CheckConstraint("quality_status IN ('RESOLVED', 'WARNING', 'BLOCKER')"),
+        CheckConstraint("date_end >= date_start"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), index=True
+    )
+    version: Mapped[int]
+    source: Mapped[str]
+    artifact_uri: Mapped[str] = mapped_column(unique=True)
+    schema_version: Mapped[str]
+    date_start: Mapped[date]
+    date_end: Mapped[date]
+    hash: Mapped[str]
+    quality_status: Mapped[str]
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    quality: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

@@ -230,3 +230,28 @@ compare_prior_sensitivity(
     Path("artifacts/prior-sensitivity"),
 )
 ```
+
+## External evaluation and release policy
+
+The pinned upstream evaluator has a separate dependency environment. Its supported
+TensorFlow/NumPy versions conflict with development typing dependencies; do not
+combine the `dev` and `evaluation` groups.
+
+```sh
+UV_PROJECT_ENVIRONMENT=.venv-evaluation uv sync --locked --no-default-groups --group evaluation
+PYTENSOR_FLAGS=cxx= LOKY_MAX_CPU_COUNT=1 OMP_NUM_THREADS=1 TF_NUM_INTRAOP_THREADS=1 TF_NUM_INTEROP_THREADS=1 .venv-evaluation/bin/decisionguard evaluate --model-run artifacts/mmm --sensitivity-run artifacts/mmm-prior --output artifacts/evaluation
+.venv-evaluation/bin/pytest tests/test_mmm_eval.py
+```
+
+All six actual upstream tests run on training-only refits, preserving the original
+model's sealed holdout. Raw source scores and flags remain separate from the
+versioned PASS/WARN/RESTRICT/BLOCK interpretation. A failed placebo blocks release;
+predictive accuracy cannot override it. Short sampling overrides are smoke checks,
+not evidence that diagnostics pass.
+
+Interrupted runs retain completed tests. Repeat the exact command with `--resume`
+to reuse verified checkpoints; changed data, model records, code, lockfile, runtime
+versions or sampling settings require a new output directory. A completed
+`evaluation.json` prevents overwriting. Failed tests are retried rather than cached
+as successes. Stop the original worker before resuming; concurrent writers to one
+run directory are unsupported.

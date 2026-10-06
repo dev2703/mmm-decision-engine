@@ -5,6 +5,11 @@ description = "Evidence-gated marketing mix model decision support"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "alembic>=1.16,<2",
+    "fastapi>=0.121,<1",
+    "psycopg[binary]>=3.2,<4",
+    "sqlalchemy>=2.0,<2.1",
+    "uvicorn>=0.35,<1",
     "arviz>=0.21,<0.23",
     "h5netcdf>=1.6,<2",
     "h5py>=3.13,<4",
@@ -36,7 +41,7 @@ dev = [
     "ruff>=0.11,<1", "pyright>=1.1.400,<2", "pandas-stubs>=2.3,<3",
     "numpy>=2.3,<2.4", {include-group = "test"},
 ]
-test = ["pytest>=8,<10"]
+test = ["pytest>=8,<10", "httpx>=0.28,<1"]
 evaluation = [
     "mmm-eval", "tensorflow>=2.19,<2.20", "tf-keras>=2.19,<2.20",
     {include-group = "test"},

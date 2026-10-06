@@ -7,15 +7,18 @@ from dataclasses import asdict
 from datetime import date, datetime
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
+from decisionguard.data.corruption import CorruptedDataset
 from decisionguard.data.integrity import (
     IntegrityConfig,
     IntegrityResult,
     clean_dataset,
     dataset_hash,
 )
+from decisionguard.data.synthetic import SyntheticDataset
 
 
 def json_date(value: object) -> str:
@@ -68,8 +71,34 @@ def write_dataset(
     return result
 
 
-def load_model_ready(output: Path) -> pd.DataFrame:
-    """Enforce the quality gate and artifact integrity at the consuming boundary."""
+def write_simulation(
+    clean: SyntheticDataset,
+    dirty: CorruptedDataset,
+    output: Path,
+    config: IntegrityConfig,
+) -> IntegrityResult:
+    """Shared CLI/API persistence, with privileged truth separately checksummed."""
+    result = write_dataset(dirty.observations, output, config, simulation=True)
+    clean.truth.to_parquet(output / "truth.parquet", index=False)
+    write_json(
+        output / "generation.json",
+        {
+            "generation": asdict(clean.config),
+            "corruption": asdict(dirty.config),
+            "removed_weeks": dirty.removed_weeks,
+            "duplicated_weeks": dirty.duplicated_weeks,
+            "defects": dirty.defects,
+        },
+    )
+    provenance = json.loads((output / "provenance.json").read_text())
+    for name in ("truth.parquet", "generation.json"):
+        provenance["artifacts"][name] = sha256((output / name).read_bytes()).hexdigest()
+    write_json(output / "provenance.json", provenance)
+    return result
+
+
+def load_quality(output: Path) -> dict[str, Any]:
+    """Verify artifact integrity, allowing blocked evidence to remain inspectable."""
     provenance = json.loads((output / "provenance.json").read_text())
     if provenance.get("simulation") and not all(
         name in provenance["artifacts"] for name in ("truth.parquet", "generation.json")
@@ -86,6 +115,12 @@ def load_model_ready(output: Path) -> pd.DataFrame:
         if sha256(path.read_bytes()).hexdigest() != provenance["artifacts"][name]:
             raise ValueError(f"{name} artifact hash mismatch")
     report = json.loads((output / "quality.json").read_text())
+    return report
+
+
+def load_model_ready(output: Path) -> pd.DataFrame:
+    """Enforce the quality gate and artifact integrity at the consuming boundary."""
+    report = load_quality(output)
     if report.get("status") not in ("RESOLVED", "WARNING"):
         raise ValueError("modeling blocked by data-quality status")
     path = output / "clean.parquet"

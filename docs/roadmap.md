@@ -479,6 +479,12 @@ Bayesian model is sufficiently trustworthy to evaluate further.
 
 Phase 5 — Mutinex mmm-eval
 
+Status: implemented. All six pinned upstream tests, fold-safe scaling, raw-result
+persistence and deterministic release policy are available. The actual 20-refit
+smoke run produced BLOCK without execution errors; a longer production evaluation
+is running. Verified per-test checkpoints support explicit interruption recovery.
+Downstream optimization recomputes policy from verified evidence and rejects BLOCK.
+
 Objective
 
 Use Mutinex's own validation framework.
@@ -527,6 +533,14 @@ Exit Criteria
 No decision model reaches optimization without release state.
 
 Phase 6 — Decision Stability + Optimizer
+
+Status: core slice implemented. Constant-weekly allocation supports total budget,
+floors/caps, protected spend, movement and release restrictions. Joint posterior
+planning includes historical carry-in, expected/conservative choices, downside,
+allocation distributions and stability. Unstable/extrapolated candidates cannot
+authorize recommendations. Executed tests demonstrate uncertainty changes allowed
+recommendations; see the technical spec for estimand, threshold and limitations.
+Further real-model experiments require release evidence that permits optimization.
 
 Objective
 

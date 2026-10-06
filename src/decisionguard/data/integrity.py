@@ -13,12 +13,10 @@ from decisionguard.data.synthetic import DEFAULT_CHANNELS
 
 Status = Literal["RESOLVED", "WARNING", "BLOCKER"]
 SPEND_COLUMNS = tuple(f"{channel.name}_spend" for channel in DEFAULT_CHANNELS)
+CONTROL_COLUMNS = ("price", "promotion", "macro_index", "competitor_index")
 NUMERIC_COLUMNS = (
     *SPEND_COLUMNS,
-    "price",
-    "promotion",
-    "macro_index",
-    "competitor_index",
+    *CONTROL_COLUMNS,
     "revenue",
 )
 COLUMNS = ("week", *NUMERIC_COLUMNS)

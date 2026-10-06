@@ -1628,3 +1628,72 @@ The [upstream TensorFlow issue](https://github.com/tensorflow/tensorflow/issues/
 reports the same failure. Pin TensorFlow/tf-keras to 2.19 in the evaluation group;
 verify import and rerun the scientific suite after the resulting NumPy change.
 An available wheel or a successful dependency solve is not a runtime check.
+
+### Phase 5 runtime separation and interruption recovery
+
+Use one lockfile with mutually exclusive `dev` and `evaluation` dependency groups.
+The supported TensorFlow 2.19 stack needs NumPy below 2.2; current pandas typing
+stubs require NumPy 2.3. An isolated evaluation environment satisfies both published
+contracts without overriding requirements or weakening development typing. This
+costs a second local environment and duplicated scientific wheels. Revisit when
+upstream evaluator support permits the same current scientific stack.
+
+The actual six-test smoke evaluation completed 20 refits and produced BLOCK with
+no test execution errors. This is a valid policy outcome, not a released model:
+placebo failure and short-refit diagnostic failures remain visible. The longer
+production evaluation was interrupted after seven completed fits, revealing that
+end-only persistence discards expensive partial progress.
+
+Persist each successful upstream test's exact Parquet table and refit evidence,
+then atomically publish its checksum manifest. Explicit resume validates input,
+source, lock, sampler, and installed-version identity before reusing results.
+Unfinished/failed tests rerun; changed checkpoints fail closed. Write the overall
+completion manifest last. This is a narrow checkpoint facility, not a job queue or
+workflow engine. It supports one worker per directory; process supervision and
+transactional claims belong to the backend phase. Code changes intentionally
+invalidate resume to avoid mixing results from different implementations.
+
+### Phase 6 planning estimand and optimizer choice
+
+Question: how should a constant weekly media budget be allocated over a declared
+horizon, conditional on joint posterior response states and observed carry-in?
+Compare against the caller's current allocation under those same states. Outcomes
+are modeled media revenue in AUD, excluding future nonmedia revenue and observation
+noise. They are neither experimentally identified incremental profit nor total
+revenue forecasts. Keep joint draws intact rather than independently sampling
+channel marginals.
+
+Use the existing SciPy SLSQP solver with budget fractions, analytic derivatives,
+and an independent feasibility check. Scale the objective by its response at the
+feasible starting point: the executed nearly-linear decision-cliff test exposed
+premature convergence when scaling only by saturation amplitude. The NumPy response
+calculation matches the pinned PyMC-Marketing geometric/Michaelis-Menten transforms
+in an executed scientific test, including observed carry-in and the finite lag
+window. Cache carry-in once; slice the chosen state for per-draw solves. The pinned
+0.14 library budget optimizer starts from zero carry-in and scores an added tail,
+which answers a different planning question. Revisit its use when a compatible
+version supports this historical/horizon contract without recompiling every draw.
+
+Expected allocation maximizes posterior mean media response. Conservative allocation
+maximizes the empirical mean of the worst 10% of improvements against current spend
+(at least one state, rounded up). Report parameter uncertainty, downside probability,
+probability of improvement, allocation quantiles, direction flips and normalized-L1
+stability. For equal-budget plans, L1 counts both ends of a transfer; cash moved is
+half that distance. A 0.2 P95 stability limit is an explicit prototype threshold,
+not an established commercial standard. An unstable or historically unsupported
+candidate cannot authorize a recommendation. Tighter movement constraints may
+make recommendations admissible; retain the original instability evidence.
+
+The release loader recomputes policy from checksum-verified raw evaluation evidence,
+model identity and prior source, rejecting inconsistent stored labels. BLOCK is
+checked before loading posterior arrays or solving. Floors, caps, protected spend,
+relative movement and source channel restrictions intersect; infeasible requests
+fail rather than silently relaxing them. Prior sensitivity must actually change
+priors while holding the model specification fixed; sampler precision can differ.
+
+Executed checks include seeded feasible-budget properties, infeasibility, restricted
+channels, stable/unstable decisions, a tiny-response allocation cliff, conservative
+downside, input immutability and analytical-gradient finite differences. Twenty
+joint states loaded from the actual reviewed candidate gave finite original-unit
+planning responses. That candidate remains unreleased pending its production
+external evaluation; numerical feasibility does not override release evidence.

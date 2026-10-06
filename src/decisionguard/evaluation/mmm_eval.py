@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from hashlib import sha256
 from importlib.metadata import version
 from pathlib import Path
@@ -27,11 +27,15 @@ from numpy.typing import NDArray
 
 from decisionguard.data.artifacts import load_model_inputs, source_code_hash, write_json
 from decisionguard.data.integrity import dataset_hash
-from decisionguard.evaluation.policy import MetricEvidence, assess_release
-from decisionguard.models.artifacts import load_mmm_record
+from decisionguard.evaluation.artifacts import UPSTREAM_COMMIT, source_evidence
+from decisionguard.evaluation.checkpoints import (
+    initialize_progress,
+    load_checkpoint,
+    save_checkpoint,
+)
+from decisionguard.evaluation.policy import assess_release
+from decisionguard.models.artifacts import load_mmm_record, validate_prior_sources
 from decisionguard.models.bayesian import MMMConfig, build_mmm, posterior_diagnostics
-
-UPSTREAM_COMMIT = "71d20009feaa30dd9606ffface62f16fb1134265"
 
 
 class FoldSafePyMCAdapter(cast(Any, PyMCAdapter)):  # pyright: ignore[reportUntypedBaseClass]
@@ -119,27 +123,6 @@ class FoldSafePyMCAdapter(cast(Any, PyMCAdapter)):  # pyright: ignore[reportUnty
         return FoldSafePyMCAdapter(created.config, self.arrivals, self.ledger)
 
 
-def source_evidence(raw: pd.DataFrame, channels: list[str]) -> list[MetricEvidence]:
-    """Interpret source flags/units directly, preserving the separate raw table."""
-    evidence: list[MetricEvidence] = []
-    for row in raw.to_dict(orient="records"):
-        specific = str(row["specific_metric_name"])
-        channel = next(
-            (name for name in channels if specific.endswith("_" + name)), None
-        )
-        value = float(row["metric_value"])
-        evidence.append(
-            MetricEvidence(
-                str(row["test_name"]),
-                str(row["general_metric_name"]),
-                value if np.isfinite(value) else None,
-                bool(row["metric_pass"]) if type(row["metric_pass"]) is bool else None,
-                channel,
-            )
-        )
-    return evidence
-
-
 def evaluate_mmm(
     model_run: Path,
     sensitivity_run: Path,
@@ -147,19 +130,12 @@ def evaluate_mmm(
     *,
     draws: int | None = None,
     tune: int | None = None,
+    resume: bool = False,
 ) -> dict[str, object]:
     """Evaluate training-only refits, keeping the main model's holdout sealed."""
-    if output.exists():
-        raise FileExistsError(output)
     code_hash_at_start = source_code_hash()
     model_record = load_mmm_record(model_run)
     alternative = load_mmm_record(sensitivity_run)
-    if (
-        model_record["dataset"]["hash"] != alternative["dataset"]["hash"]
-        or model_record["training_window"] != alternative["training_window"]
-        or model_record["config"]["channels"] != alternative["config"]["channels"]
-    ):
-        raise ValueError("sensitivity source does not match the evaluated model")
     config = MMMConfig(
         **{
             key: value
@@ -167,6 +143,12 @@ def evaluate_mmm(
             if key not in ("sampler", "cores")
         }
     )
+    config = replace(
+        config,
+        draws=config.draws if draws is None else draws,
+        tune=config.tune if tune is None else tune,
+    )
+    validate_prior_sources(model_record, alternative)
     data, arrivals = load_model_inputs(Path(model_record["dataset"]["path"]))
     if model_record["dataset"]["hash"] != dataset_hash(data):
         raise ValueError("model input identity changed")
@@ -183,8 +165,8 @@ def evaluate_mmm(
         revenue_column="revenue",
         response_column="response",
         fit_kwargs={
-            "draws": draws or config.draws,
-            "tune": tune or config.tune,
+            "draws": config.draws,
+            "tune": config.tune,
             "chains": config.chains,
             "target_accept": config.target_accept,
             "random_seed": config.seed,
@@ -198,15 +180,54 @@ def evaluate_mmm(
             "cores": 1,
         }
     )
+    runtime_versions = {
+        name: version(name)
+        for name in (
+            "mmm-eval",
+            "pymc-marketing",
+            "pymc",
+            "pytensor",
+            "nutpie",
+            "numpy",
+            "pandas",
+            "tensorflow",
+            "tf-keras",
+        )
+    }
+    identity: dict[str, object] = {
+        "model_record_hash": sha256(
+            (model_run / "model.json").read_bytes()
+        ).hexdigest(),
+        "sensitivity_record_hash": sha256(
+            (sensitivity_run / "model.json").read_bytes()
+        ).hexdigest(),
+        "dataset_hash": dataset_hash(data),
+        "code_hash": code_hash_at_start,
+        "lock_hash": sha256(Path("uv.lock").read_bytes()).hexdigest(),
+        "configuration": upstream_config.fit_config_dict,
+        "runtime_versions": runtime_versions,
+        "upstream_commit": UPSTREAM_COMMIT,
+    }
+    initialize_progress(output, identity, resume=resume)
     ledger: list[dict[str, object]] = []
     adapter = FoldSafePyMCAdapter(upstream_config, arrival_by_week, ledger)
     orchestrator = cast(Any, ValidationTestOrchestrator)()
     tables: list[pd.DataFrame] = []
     errors: list[dict[str, str]] = []
     for test in cast(Any, ValidationTestNames):
+        name = str(test.value)
+        cached = load_checkpoint(output, name)
+        if cached is not None:
+            table, refits = cached
+            tables.append(table)
+            ledger.extend(refits)
+            continue
+        first_refit = len(ledger)
         try:
             result = orchestrator.validate(adapter, data, [test])
-            tables.append(cast(pd.DataFrame, result.to_df()))
+            table = cast(pd.DataFrame, result.to_df())
+            save_checkpoint(output, name, table, ledger[first_refit:])
+            tables.append(table)
         except Exception as error:
             # Preserve failures and fail closed; never substitute a passing score.
             errors.append(
@@ -252,7 +273,6 @@ def evaluate_mmm(
         channels,
         prior_sensitivity=sensitivity,
     )
-    output.mkdir(parents=True, exist_ok=False)
     raw.to_parquet(output / "mmm_eval_raw.parquet", index=False)
     # JSON null preserves undefined evidence as undefined; Parquet keeps raw NaN.
     write_json(
@@ -261,6 +281,8 @@ def evaluate_mmm(
     )
     record: dict[str, object] = {
         "evaluator": "mmm-eval",
+        "runtime_versions": runtime_versions,
+        "progress_identity": identity,
         "version": version("mmm-eval"),
         "commit": UPSTREAM_COMMIT,
         "model_run": str(model_run.resolve()),

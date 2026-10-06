@@ -21,8 +21,8 @@ from decisionguard.data.artifacts import (
     source_code_hash,
     write_json,
 )
-from decisionguard.experiments.baseline import forecast_metrics
-from decisionguard.experiments.regression import CONTROLS, SPEND
+from decisionguard.data.integrity import CONTROL_COLUMNS, SPEND_COLUMNS
+from decisionguard.experiments.metrics import forecast_metrics
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class MMMConfig:
     target_accept: float = 0.99
     media_prior_mean: float = 0.15
     media_prior_sigma: float = 0.1
-    channels: tuple[str, ...] = tuple(SPEND)
+    channels: tuple[str, ...] = SPEND_COLUMNS
 
     def __post_init__(self) -> None:
         for name in (
@@ -57,7 +57,7 @@ class MMMConfig:
         if (
             not self.channels
             or len(set(self.channels)) != len(self.channels)
-            or not set(self.channels) <= set(SPEND)
+            or not set(self.channels) <= set(SPEND_COLUMNS)
         ):
             raise ValueError("channels must be unique known spend columns")
         if not all(
@@ -73,9 +73,9 @@ def prepare_mmm_inputs(
     """Center/scale controls and trend on training only, preserving AUD media."""
     if not 52 <= train_rows <= len(data):
         raise ValueError("MMM requires at least 52 contiguous training weeks")
-    x = data[["week", *SPEND, *CONTROLS]].copy()
+    x = data[["week", *SPEND_COLUMNS, *CONTROL_COLUMNS]].copy()
     x["trend"] = np.arange(len(x), dtype=np.float64)
-    columns = [*CONTROLS, "trend"]
+    columns = [*CONTROL_COLUMNS, "trend"]
     mean = x.iloc[:train_rows][columns].mean()
     scale = x.iloc[:train_rows][columns].std(ddof=0).replace(0, 1)
     x[columns] = (x[columns] - mean) / scale
@@ -93,7 +93,7 @@ def build_mmm(config: MMMConfig) -> Any:
     return cast(Any, MMM)(
         date_column="week",
         channel_columns=list(config.channels),
-        control_columns=[*CONTROLS, "trend"],
+        control_columns=[*CONTROL_COLUMNS, "trend"],
         yearly_seasonality=2,
         adstock=cast(Any, GeometricAdstock)(
             l_max=config.adstock_lags,

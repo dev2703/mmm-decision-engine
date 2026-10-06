@@ -18,6 +18,7 @@ from decisionguard.data.artifacts import (
     write_json,
 )
 from decisionguard.experiments.ets import ets_forecast
+from decisionguard.experiments.metrics import forecast_metrics
 from decisionguard.experiments.regression import regression_forecast
 
 
@@ -108,22 +109,6 @@ def seasonal_naive(
     if training.ndim != 1 or len(training) < period or not np.isfinite(training).all():
         raise ValueError("training must be finite and contain a complete season")
     return training[-period:][np.arange(horizon) % period].copy()
-
-
-def forecast_metrics(
-    actual: NDArray[np.float64], predicted: NDArray[np.float64]
-) -> dict[str, float | None]:
-    if actual.ndim != 1 or actual.shape != predicted.shape or not len(actual):
-        raise ValueError("actual and predicted must be nonempty matching vectors")
-    if not np.isfinite(actual).all() or not np.isfinite(predicted).all():
-        raise ValueError("metric inputs must be finite")
-    error = predicted - actual
-    denominator = float(np.abs(actual).sum())
-    return {
-        "mae": float(np.abs(error).mean()),
-        "rmse": float(np.sqrt(np.square(error).mean())),
-        "wape": float(np.abs(error).sum()) / denominator if denominator else None,
-    }
 
 
 def evaluate_baseline(

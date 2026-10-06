@@ -21,10 +21,7 @@ def load_mmm_record(directory: Path) -> dict[str, Any]:
     return record
 
 
-def compare_prior_sensitivity(
-    baseline: Path, alternative: Path, output: Path
-) -> dict[str, object]:
-    first, second = load_mmm_record(baseline), load_mmm_record(alternative)
+def validate_prior_sources(first: dict[str, Any], second: dict[str, Any]) -> None:
     if (
         first["dataset"]["hash"] != second["dataset"]["hash"]
         or first["training_window"] != second["training_window"]
@@ -33,6 +30,31 @@ def compare_prior_sensitivity(
         raise ValueError(
             "sensitivity requires matching data, training window and channels"
         )
+    prior_keys = {"media_prior_mean", "media_prior_sigma"}
+    if not any(first["config"][key] != second["config"][key] for key in prior_keys):
+        raise ValueError("prior sensitivity requires a changed media prior")
+    sampler_keys = {
+        "draws",
+        "tune",
+        "chains",
+        "seed",
+        "target_accept",
+        "max_tree_depth",
+        "sampler",
+        "cores",
+    }
+    for key in first["config"].keys() | second["config"].keys():
+        if key not in prior_keys | sampler_keys and first["config"].get(key) != second[
+            "config"
+        ].get(key):
+            raise ValueError("prior sensitivity cannot also change model specification")
+
+
+def compare_prior_sensitivity(
+    baseline: Path, alternative: Path, output: Path
+) -> dict[str, object]:
+    first, second = load_mmm_record(baseline), load_mmm_record(alternative)
+    validate_prior_sources(first, second)
     if output.exists():
         raise FileExistsError(output)
     differences = {

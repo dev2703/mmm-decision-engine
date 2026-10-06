@@ -16,10 +16,11 @@ from sklearn.preprocessing import (  # pyright: ignore[reportMissingTypeStubs]
 )
 from threadpoolctl import threadpool_limits  # pyright: ignore[reportMissingTypeStubs]
 
+from decisionguard.data.integrity import CONTROL_COLUMNS, SPEND_COLUMNS
 from decisionguard.data.synthetic import geometric_adstock
 
-SPEND = ["search_spend", "meta_spend", "tv_spend", "ooh_spend", "youtube_spend"]
-CONTROLS = ["price", "promotion", "macro_index", "competitor_index"]
+SPEND = list(SPEND_COLUMNS)
+CONTROLS = list(CONTROL_COLUMNS)
 
 
 def regression_features(

@@ -2,8 +2,6 @@
 
 import argparse
 import json
-from dataclasses import asdict
-from hashlib import sha256
 from pathlib import Path
 
 
@@ -71,6 +69,17 @@ def main() -> None:
     evaluation.add_argument("--output", type=Path, required=True)
     evaluation.add_argument("--draws", type=int)
     evaluation.add_argument("--tune", type=int)
+    evaluation.add_argument("--resume", action="store_true")
+    optimization = commands.add_parser(
+        "optimize", help="Analyze release-gated budget allocations"
+    )
+    optimization.add_argument("--model-run", type=Path, required=True)
+    optimization.add_argument("--evaluation", type=Path, required=True)
+    optimization.add_argument("--constraints", type=Path, required=True)
+    optimization.add_argument("--output", type=Path, required=True)
+    optimization.add_argument("--horizon", type=int, default=13)
+    optimization.add_argument("--draws", type=int, default=200)
+    optimization.add_argument("--seed", type=int, default=42)
     training = commands.add_parser(
         "train", help="Fit and audit a Bayesian MMM candidate"
     )
@@ -97,6 +106,22 @@ def main() -> None:
         )
     args = parser.parse_args()
     try:
+        if args.command == "optimize":
+            from decisionguard.optimization.allocation import BudgetConstraints
+            from decisionguard.optimization.artifacts import optimize_run
+
+            quantities = json.loads(args.constraints.read_text())
+            record = optimize_run(
+                args.model_run,
+                args.evaluation,
+                args.output,
+                BudgetConstraints(**quantities),
+                horizon=args.horizon,
+                draws=args.draws,
+                seed=args.seed,
+            )
+            print(json.dumps(record["alternatives"]))
+            return
         if args.command == "evaluate":
             from decisionguard.evaluation.mmm_eval import evaluate_mmm
 
@@ -106,6 +131,7 @@ def main() -> None:
                 args.output,
                 draws=args.draws,
                 tune=args.tune,
+                resume=args.resume,
             )
             print(json.dumps(record["policy"]))
             return
@@ -177,7 +203,7 @@ def main() -> None:
             return
         import pandas as pd
 
-        from decisionguard.data.artifacts import write_dataset, write_json
+        from decisionguard.data.artifacts import write_dataset, write_simulation
         from decisionguard.data.corruption import CorruptionConfig, corrupt_dataset
         from decisionguard.data.integrity import IntegrityConfig
         from decisionguard.data.synthetic import SyntheticConfig, generate_dataset
@@ -217,26 +243,7 @@ def main() -> None:
                 duplicate_policy=args.duplicate_policy,
                 currency_rates=tuple(rates),
             )
-            result = write_dataset(
-                dirty.observations, args.output, config, simulation=True
-            )
-            clean.truth.to_parquet(args.output / "truth.parquet", index=False)
-            write_json(
-                args.output / "generation.json",
-                {
-                    "generation": asdict(generating),
-                    "corruption": asdict(corrupting),
-                    "removed_weeks": dirty.removed_weeks,
-                    "duplicated_weeks": dirty.duplicated_weeks,
-                    "defects": dirty.defects,
-                },
-            )
-            provenance = json.loads((args.output / "provenance.json").read_text())
-            for name in ("truth.parquet", "generation.json"):
-                provenance["artifacts"][name] = sha256(
-                    (args.output / name).read_bytes()
-                ).hexdigest()
-            write_json(args.output / "provenance.json", provenance)
+            result = write_simulation(clean, dirty, args.output, config)
         else:
             config = IntegrityConfig(
                 expected_start=args.expected_start,
