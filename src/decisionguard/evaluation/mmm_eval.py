@@ -9,15 +9,29 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
 
+# TensorFlow must load before pandas/PyArrow in this isolated evaluation process.
+import tensorflow as _tensorflow  # noqa: F401  # pyright: ignore[reportMissingImports, reportMissingTypeStubs]
+
+# isort: split
+
 import numpy as np
 import pandas as pd
+from mmm_eval.adapters.pymc import (  # pyright: ignore[reportMissingImports, reportMissingTypeStubs]
+    PyMCAdapter,  # pyright: ignore[reportUnknownVariableType]
+)
+from mmm_eval.configs import (  # pyright: ignore[reportMissingImports, reportMissingTypeStubs]
+    PyMCConfig,  # pyright: ignore[reportUnknownVariableType]
+)
+from mmm_eval.core.validation_test_orchestrator import (  # pyright: ignore[reportMissingImports, reportMissingTypeStubs]
+    ValidationTestOrchestrator,  # pyright: ignore[reportUnknownVariableType]
+)
+from mmm_eval.core.validation_tests_models import (  # pyright: ignore[reportMissingImports, reportMissingTypeStubs]
+    ValidationTestNames,  # pyright: ignore[reportUnknownVariableType]
+)
 from numpy.typing import NDArray
-from mmm_eval.adapters.pymc import PyMCAdapter  # pyright: ignore[reportMissingTypeStubs]
-from mmm_eval.configs import PyMCConfig  # pyright: ignore[reportMissingTypeStubs]
-from mmm_eval.core.validation_test_orchestrator import ValidationTestOrchestrator  # pyright: ignore[reportMissingTypeStubs]
-from mmm_eval.core.validation_tests_models import ValidationTestNames  # pyright: ignore[reportMissingTypeStubs]
 
 from decisionguard.data.artifacts import load_model_inputs, source_code_hash, write_json
+from decisionguard.data.integrity import dataset_hash
 from decisionguard.evaluation.policy import MetricEvidence, assess_release
 from decisionguard.models.artifacts import load_mmm_record
 from decisionguard.models.bayesian import MMMConfig, build_mmm, posterior_diagnostics
@@ -34,7 +48,8 @@ class FoldSafePyMCAdapter(cast(Any, PyMCAdapter)):  # pyright: ignore[reportUnty
         arrivals: pd.Series[pd.Timestamp],
         ledger: list[dict[str, object]],
     ) -> None:
-        super().__init__(config)
+        base: Any = super()
+        base.__init__(config)
         self.arrivals = arrivals
         self.ledger = ledger
         self.mean: pd.Series[float] | None = None
@@ -42,25 +57,29 @@ class FoldSafePyMCAdapter(cast(Any, PyMCAdapter)):  # pyright: ignore[reportUnty
 
     def fit(self, data: pd.DataFrame) -> None:
         external = cast(Any, self)
-        dates = pd.DatetimeIndex(data[external.date_column])
+        date_column: str = external.date_column
+        dates = pd.DatetimeIndex(data[date_column])
         available = self.arrivals.reindex(dates)
         origin = dates.max() + pd.Timedelta(days=7)
         if available.isna().any() or (available > origin).any():
             raise ValueError(
                 "upstream refit uses observations unavailable at its origin"
             )
-        controls = external.control_columns
-        self.mean = data[controls].mean()
-        self.scale = data[controls].std(ddof=0).replace(0, 1)
+        controls: list[str] = external.control_columns
+        mean = data[controls].mean()
+        scale = data[controls].std(ddof=0).replace(0, 1)
+        self.mean = mean
+        self.scale = scale
         transformed = self._transform(data)
-        cast(Any, super()).fit(transformed)
+        base: Any = super()
+        base.fit(transformed)
         self.ledger.append(
             {
                 "train_start": dates.min().isoformat(),
                 "train_end": dates.max().isoformat(),
                 "train_rows": len(data),
-                "control_mean": self.mean.to_dict(),
-                "control_scale": self.scale.to_dict(),
+                "control_mean": mean.to_dict(),
+                "control_scale": scale.to_dict(),
                 "diagnostics": posterior_diagnostics(external.trace),
             }
         )
@@ -79,7 +98,8 @@ class FoldSafePyMCAdapter(cast(Any, PyMCAdapter)):  # pyright: ignore[reportUnty
         covariates = self._transform(data).drop(
             columns=["response", "revenue"], errors="ignore"
         )
-        result = cast(Any, super()).predict(covariates)
+        base: Any = super()
+        result = base.predict(covariates)
         return np.asarray(result, dtype=np.float64)
 
     def fit_and_predict_in_sample(self, data: pd.DataFrame) -> NDArray[np.float64]:
@@ -99,15 +119,14 @@ class FoldSafePyMCAdapter(cast(Any, PyMCAdapter)):  # pyright: ignore[reportUnty
     def _create_adapter_with_placebo_channel(
         self, shuffled_channel: str
     ) -> FoldSafePyMCAdapter:
-        created = cast(Any, super())._create_adapter_with_placebo_channel(
-            shuffled_channel
-        )
+        base: Any = super()
+        created = base._create_adapter_with_placebo_channel(shuffled_channel)
         return FoldSafePyMCAdapter(created.config, self.arrivals, self.ledger)
 
 
 def source_evidence(raw: pd.DataFrame, channels: list[str]) -> list[MetricEvidence]:
     """Interpret source flags/units directly, preserving the separate raw table."""
-    evidence = []
+    evidence: list[MetricEvidence] = []
     for row in raw.to_dict(orient="records"):
         specific = str(row["specific_metric_name"])
         channel = next(
@@ -137,6 +156,7 @@ def evaluate_mmm(
     """Evaluate training-only refits, keeping the main model's holdout sealed."""
     if output.exists():
         raise FileExistsError(output)
+    code_hash_at_start = source_code_hash()
     model_record = load_mmm_record(model_run)
     alternative = load_mmm_record(sensitivity_run)
     if (
@@ -153,16 +173,11 @@ def evaluate_mmm(
         }
     )
     data, arrivals = load_model_inputs(Path(model_record["dataset"]["path"]))
-    if model_record["dataset"]["hash"] != load_mmm_record(model_run)["dataset"]["hash"]:
+    if model_record["dataset"]["hash"] != dataset_hash(data):
         raise ValueError("model input identity changed")
+    arrival_by_week = pd.Series(arrivals.to_numpy(), index=data["week"])
     rows = model_record["training_window"]["rows"]
     data = data.iloc[:rows].copy()
-    arrival_by_week = pd.Series(
-        arrivals.to_numpy(),
-        index=pd.read_parquet(Path(model_record["dataset"]["path"]) / "clean.parquet")[
-            "week"
-        ],
-    )
     data["trend"] = np.arange(len(data), dtype=np.float64)
     data["response"] = data["revenue"]
     model = build_mmm(config)
@@ -190,12 +205,36 @@ def evaluate_mmm(
     )
     ledger: list[dict[str, object]] = []
     adapter = FoldSafePyMCAdapter(upstream_config, arrival_by_week, ledger)
+    orchestrator = cast(Any, ValidationTestOrchestrator)()
+    tables: list[pd.DataFrame] = []
+    errors: list[dict[str, str]] = []
+    for test in cast(Any, ValidationTestNames):
+        try:
+            result = orchestrator.validate(adapter, data, [test])
+            tables.append(cast(pd.DataFrame, result.to_df()))
+        except Exception as error:
+            # Preserve failures and fail closed; never substitute a passing score.
+            errors.append(
+                {
+                    "test": str(test.value),
+                    "type": type(error).__name__,
+                    "message": str(error),
+                }
+            )
     raw = (
-        cast(Any, ValidationTestOrchestrator)()
-        .validate(adapter, data, list(cast(Any, ValidationTestNames)))
-        .to_df()
+        pd.concat(tables, ignore_index=True)
+        if tables
+        else pd.DataFrame(
+            columns=[
+                "test_name",
+                "general_metric_name",
+                "specific_metric_name",
+                "metric_value",
+                "metric_pass",
+                "timestamp",
+            ]
+        )
     )
-    raw = cast(pd.DataFrame, raw)
     channels = list(config.channels)
     sensitivity = {
         name: abs(
@@ -236,6 +275,7 @@ def evaluate_mmm(
         "sensitivity_run": str(sensitivity_run.resolve()),
         "sensitivity": sensitivity,
         "policy": asdict(decision),
+        "test_execution_errors": errors,
         "refits": ledger,
         "evaluation_window": model_record["training_window"],
         "configuration": {
@@ -251,7 +291,7 @@ def evaluate_mmm(
             "Source ROI is net ROI percent; model.json ROI is revenue/spend ratio",
             "Evaluation refits exclude the original sealed holdout",
         ],
-        "code_hash": source_code_hash(),
+        "code_hash": code_hash_at_start,
         "raw_artifact_hash": sha256(
             (output / "mmm_eval_raw.parquet").read_bytes()
         ).hexdigest(),

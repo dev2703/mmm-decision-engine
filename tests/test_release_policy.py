@@ -14,7 +14,7 @@ CHANNELS = ["search_spend", "meta_spend"]
 
 
 def evidence() -> list[MetricEvidence]:
-    rows = []
+    rows: list[MetricEvidence] = []
     for test in ("in_sample_accuracy", "holdout_accuracy"):
         rows.extend(
             MetricEvidence(test, metric, 1.0, True)

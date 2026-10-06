@@ -22,6 +22,7 @@ credentials.json
 
 # Virtual environments, local service state, and caches.
 .venv/
+.venv-*/
 venv/
 env/
 ENV/

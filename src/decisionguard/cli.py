@@ -6,15 +6,6 @@ from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
 
-import pandas as pd
-
-from decisionguard.data.artifacts import write_dataset, write_json
-from decisionguard.data.corruption import CorruptionConfig, corrupt_dataset
-from decisionguard.data.integrity import IntegrityConfig
-from decisionguard.data.synthetic import SyntheticConfig, generate_dataset
-from decisionguard.experiments.baseline import BaselineConfig, run_baseline
-from decisionguard.experiments.comparison import run_comparison
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="decisionguard")
@@ -72,6 +63,14 @@ def main() -> None:
         default="seasonal_naive",
     )
     baseline.add_argument("--hypothesis")
+    evaluation = commands.add_parser(
+        "evaluate", help="Run upstream MMM checks and release policy"
+    )
+    evaluation.add_argument("--model-run", type=Path, required=True)
+    evaluation.add_argument("--sensitivity-run", type=Path, required=True)
+    evaluation.add_argument("--output", type=Path, required=True)
+    evaluation.add_argument("--draws", type=int)
+    evaluation.add_argument("--tune", type=int)
     training = commands.add_parser(
         "train", help="Fit and audit a Bayesian MMM candidate"
     )
@@ -98,6 +97,18 @@ def main() -> None:
         )
     args = parser.parse_args()
     try:
+        if args.command == "evaluate":
+            from decisionguard.evaluation.mmm_eval import evaluate_mmm
+
+            record = evaluate_mmm(
+                args.model_run,
+                args.sensitivity_run,
+                args.output,
+                draws=args.draws,
+                tune=args.tune,
+            )
+            print(json.dumps(record["policy"]))
+            return
         if args.command == "train":
             from decisionguard.models.bayesian import MMMConfig, train_mmm
 
@@ -127,6 +138,9 @@ def main() -> None:
             )
             return
         if args.command == "compare":
+            from decisionguard.experiments.baseline import BaselineConfig
+            from decisionguard.experiments.comparison import run_comparison
+
             print(
                 json.dumps(
                     run_comparison(
@@ -143,6 +157,8 @@ def main() -> None:
             )
             return
         if args.command == "baseline":
+            from decisionguard.experiments.baseline import BaselineConfig, run_baseline
+
             result = run_baseline(
                 args.dataset,
                 args.output,
@@ -159,6 +175,13 @@ def main() -> None:
                 json.dumps({"cv": result.cv_metrics, "holdout": result.holdout_metrics})
             )
             return
+        import pandas as pd
+
+        from decisionguard.data.artifacts import write_dataset, write_json
+        from decisionguard.data.corruption import CorruptionConfig, corrupt_dataset
+        from decisionguard.data.integrity import IntegrityConfig
+        from decisionguard.data.synthetic import SyntheticConfig, generate_dataset
+
         rates: list[tuple[str, float]] = []
         for text in args.currency_rate:
             currency, factor = text.split("=", 1)
@@ -231,6 +254,12 @@ def main() -> None:
             parser.exit(
                 2, "Modeling blocked; inspect quality.json for required intervention.\n"
             )
+    except ImportError as error:
+        parser.exit(
+            2,
+            f"Optional evaluation dependency unavailable: {error}. "
+            "Use the documented evaluation environment.\n",
+        )
     except (ValueError, OSError) as error:
         parser.exit(2, f"{error}\n")
 
