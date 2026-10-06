@@ -223,3 +223,28 @@ def test_cli_baseline(tmp_path: Path) -> None:
     metrics = json.loads(completed.stdout)
     assert "cv" in metrics and "holdout" in metrics
     assert (output / "predictions.parquet").is_file()
+
+
+@pytest.mark.parametrize("scale", [1e200, 1e-200])
+def test_metrics_preserve_scale_without_square_overflow_or_underflow(
+    scale: float,
+) -> None:
+    actual = np.array([scale, scale])
+    predicted = np.zeros(2)
+    result = forecast_metrics(actual, predicted)
+    assert result["mae"] == pytest.approx(scale, rel=1e-12, abs=0)
+    assert result["rmse"] == pytest.approx(scale, rel=1e-12, abs=0)
+    assert result["wape"] == pytest.approx(1.0)
+
+
+def test_metrics_reject_unrepresentable_difference() -> None:
+    with pytest.raises(ValueError, match="numerical range"):
+        forecast_metrics(np.array([1e308]), np.array([-1e308]))
+
+
+def test_unsigned_inputs_do_not_wrap_subtraction() -> None:
+    result = forecast_metrics(
+        np.array([3], dtype=np.uint64), np.array([2], dtype=np.uint64)
+    )
+    assert result["mae"] == 1.0 and result["rmse"] == 1.0
+    assert result["wape"] == pytest.approx(1 / 3)

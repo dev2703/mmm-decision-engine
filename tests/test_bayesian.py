@@ -64,6 +64,8 @@ def test_fast_mmm_build_sample_and_reload_preserve_real_posterior(
 
     loaded = cast(Any, MMM).load(str(output / "posterior.nc"))
     assert loaded.idata.posterior.sizes["draw"] == 8
+    assert "warmup_posterior" not in loaded.idata.groups()
+    assert "warmup_sample_stats" not in loaded.idata.groups()
     np.testing.assert_allclose(
         loaded.idata.observed_data["y"].to_numpy(),
         generate_dataset(SyntheticConfig(weeks=78))
@@ -106,3 +108,21 @@ def test_clean_synthetic_signed_controls_recover_without_sign_constrained_priors
     controls = fitted.idata.posterior["gamma_control"]
     assert float((controls.sel(control="price") < 0).mean()) > 0.9
     assert float((controls.sel(control="promotion") > 0).mean()) > 0.9
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("media_prior_mean", True),
+        ("media_prior_mean", "expression"),
+        ("media_prior_sigma", None),
+        ("target_accept", "0.99"),
+        ("channels", None),
+        ("save_warmup", 1),
+    ],
+)
+def test_untrusted_configuration_primitives_fail_with_clear_value_error(
+    field: str, value: Any
+) -> None:
+    with pytest.raises(ValueError):
+        MMMConfig(**{field: value})

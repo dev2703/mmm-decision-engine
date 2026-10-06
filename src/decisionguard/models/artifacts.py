@@ -1,20 +1,17 @@
 """Load complete immutable MMM evidence and record real sensitivity comparisons."""
 
 import json
-from hashlib import sha256
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
-from decisionguard.data.artifacts import source_code_hash, write_json
+from decisionguard.data.artifacts import file_hash, source_code_hash, write_json
 
 
 def load_mmm_record(directory: Path) -> dict[str, Any]:
     record = json.loads((directory / "model.json").read_text())
     for name in ("posterior.nc", "channel_draws.npz", "predictions.parquet"):
-        if (
-            sha256((directory / name).read_bytes()).hexdigest()
-            != record["artifacts"][name]
-        ):
+        if file_hash(directory / name) != record["artifacts"][name]:
             raise ValueError(f"{name} model artifact hash mismatch")
     if record["model_family"] != "pymc_marketing_mmm":
         raise ValueError("not a PyMC-Marketing model run")
@@ -41,6 +38,7 @@ def validate_prior_sources(first: dict[str, Any], second: dict[str, Any]) -> Non
         "target_accept",
         "max_tree_depth",
         "sampler",
+        "save_warmup",
         "cores",
     }
     for key in first["config"].keys() | second["config"].keys():
@@ -48,6 +46,25 @@ def validate_prior_sources(first: dict[str, Any], second: dict[str, Any]) -> Non
             "config"
         ].get(key):
             raise ValueError("prior sensitivity cannot also change model specification")
+
+
+def roi_sensitivity(
+    first: dict[str, Any], second: dict[str, Any]
+) -> dict[str, float | None]:
+    """Undefined relative change is missing evidence, never a zero or a crash."""
+    changes: dict[str, float | None] = {}
+    for channel in first["config"]["channels"]:
+        base = first["channels"][channel]["roi_mean"]
+        alternative = second["channels"][channel]["roi_mean"]
+        change = None
+        if base and all(
+            type(value) in (int, float) and isfinite(value)
+            for value in (base, alternative)
+        ):
+            relative = abs(alternative - base) / abs(base)
+            change = relative if isfinite(relative) else None
+        changes[channel] = change
+    return changes
 
 
 def compare_prior_sensitivity(
@@ -62,16 +79,15 @@ def compare_prior_sensitivity(
         for key, value in first["config"].items()
         if value != second["config"].get(key)
     }
-    if not differences:
-        raise ValueError("sensitivity requires a changed configuration")
     channels = {}
+    sensitivity = roi_sensitivity(first, second)
     for name, evidence in first["channels"].items():
         base = evidence["roi_mean"]
         alt = second["channels"][name]["roi_mean"]
         channels[name] = {
             "baseline_roi_mean": base,
             "alternative_roi_mean": alt,
-            "relative_change": abs(alt - base) / abs(base) if base else None,
+            "relative_change": sensitivity[name],
             "baseline_interval_90": evidence["roi_interval_90"],
             "alternative_interval_90": second["channels"][name]["roi_interval_90"],
         }
@@ -84,7 +100,7 @@ def compare_prior_sensitivity(
             "alternative": second["diagnostics"],
         },
         "runs": {
-            str(path.resolve()): sha256((path / "model.json").read_bytes()).hexdigest()
+            str(path.resolve()): file_hash(path / "model.json")
             for path in (baseline, alternative)
         },
         "decision": "retain sensitivity evidence; no automatic promotion",

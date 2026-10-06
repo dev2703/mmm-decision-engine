@@ -23,6 +23,17 @@ from decisionguard.evaluation.policy import (
 from decisionguard.optimization import artifacts as optimization
 from decisionguard.optimization.allocation import BudgetConstraints
 
+DIAGNOSTICS = {
+    "diagnostic_status": "ACCEPTABLE",
+    "sufficient_chains_draws": True,
+    "max_rhat": 1.0,
+    "min_ess_bulk": 500.0,
+    "min_ess_tail": 500.0,
+    "divergences": 0,
+    "maxdepth_reached": 0,
+    "bfmi_by_chain": [0.4, 0.4],
+}
+
 
 def release_fixture(root: Path, *, placebo_passes: bool = True) -> tuple[Path, Path]:
     model, alternative, evaluation = (
@@ -52,7 +63,7 @@ def release_fixture(root: Path, *, placebo_passes: bool = True) -> tuple[Path, P
                 },
                 "dataset": {"hash": "same", "quality_status": "RESOLVED"},
                 "training_window": {"rows": 143},
-                "diagnostics": {"diagnostic_status": "ACCEPTABLE"},
+                "diagnostics": DIAGNOSTICS,
                 "channels": {c: {"roi_mean": 1.0} for c in channels},
             },
         )
@@ -76,7 +87,7 @@ def release_fixture(root: Path, *, placebo_passes: bool = True) -> tuple[Path, P
     raw = pd.DataFrame(rows)
     decision = assess_release(
         source_evidence(raw, channels),
-        {"diagnostic_status": "ACCEPTABLE"},
+        DIAGNOSTICS,
         "RESOLVED",
         channels,
         prior_sensitivity={"a": 0.0, "b": 0.0},
@@ -103,7 +114,7 @@ def release_fixture(root: Path, *, placebo_passes: bool = True) -> tuple[Path, P
             },
             "policy": asdict(decision),
             "test_execution_errors": [],
-            "refits": [{"diagnostics": {"diagnostic_status": "ACCEPTABLE"}}],
+            "refits": [{"diagnostics": DIAGNOSTICS}],
         },
     )
     return evaluation, model
@@ -154,3 +165,75 @@ def test_changed_artifacts_cannot_reuse_release(tmp_path: Path, target: str) -> 
         write_json(path / "model.json", record)
     with pytest.raises(ValueError):
         load_release(evaluation, model)
+
+
+def test_upstream_rows_and_units_remain_unmodified() -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "test_name": "holdout_accuracy",
+                "general_metric_name": "mape",
+                "specific_metric_name": "mape",
+                "metric_value": 15.5,
+                "metric_pass": False,
+            },
+            {
+                "test_name": "perturbation",
+                "general_metric_name": "percentage_change",
+                "specific_metric_name": "percentage_change_meta_spend",
+                "metric_value": 9.0,
+                "metric_pass": False,
+            },
+            {
+                "test_name": "placebo",
+                "general_metric_name": "shuffled_channel_roi",
+                "specific_metric_name": "shuffled_channel_roi_search_spend_shuffled",
+                "metric_value": -60.0,
+                "metric_pass": True,
+            },
+        ]
+    )
+    before = raw.copy(deep=True)
+    evidence = source_evidence(raw, ["meta_spend", "search_spend"])
+    pd.testing.assert_frame_equal(raw, before)
+    assert evidence[0].value == 15.5 and evidence[0].passed is False
+    assert evidence[1].channel == "meta_spend" and evidence[1].value == 9.0
+    assert evidence[2].value == -60.0 and evidence[2].passed is True
+
+
+@pytest.mark.parametrize("value", [None, "not-a-number", float("inf"), True])
+def test_undefined_source_values_remain_invalid_instead_of_coerced_to_pass(
+    value: object,
+) -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "test_name": "holdout_accuracy",
+                "general_metric_name": "mape",
+                "specific_metric_name": "mape",
+                "metric_value": value,
+                "metric_pass": True,
+            }
+        ]
+    )
+    original = raw.copy(deep=True)
+    evidence = source_evidence(raw, ["a"])
+    assert evidence[0].value is None
+    assert evidence[0].passed is True
+    pd.testing.assert_frame_equal(raw, original)
+
+
+def test_duplicate_source_columns_cannot_hide_failed_flag() -> None:
+    raw = pd.DataFrame(
+        [["placebo", "shuffled_channel_roi", "roi", 100.0, False, True]],
+        columns=[
+            "test_name",
+            "general_metric_name",
+            "specific_metric_name",
+            "metric_value",
+            "metric_pass",
+            "metric_pass",
+        ],
+    )
+    with pytest.raises(ValueError, match="unique upstream metric columns"):
+        source_evidence(raw, ["a"])

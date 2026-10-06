@@ -1754,3 +1754,61 @@ local request limits; each request gets a generated correlation ID and structure
 operation/status/duration logs without request bodies or credentials. PostgreSQL
 integration checks exercise snapshot isolation, duplicate claims, rollback/failure
 and a real one-chain training smoke whose diagnostics remain INCOMPLETE.
+
+### Phases 0–5 audit and strengthening
+
+The full upstream production evaluation completed all six tests and 20 actual
+four-chain refits (2,000 draws, 1,500 tuning steps each), without execution errors.
+Its release state is BLOCK: shuffled-channel net ROI is 34.1895%, four repeated
+refit executions record a divergence, several channels fail refresh/perturbation
+checks, and OOH changes by 52.56% under the wider prior. The base and wider-prior
+candidate fits individually pass diagnostics; that does not override refit or
+placebo evidence. Recomputed release interpretation agrees with the stored record.
+These failures are retained, not fixed by relaxing thresholds.
+
+Close two integrity gaps. Clean-data identity alone cannot detect changed raw
+arrival timestamps; consumers now verify raw, clean and quality artifact identities
+against the model's recorded evidence. Identical relocated artifacts remain valid;
+absolute historical paths remain provenance, with optional explicit data-location
+overrides. Diagnostic status labels alone are insufficient: a shared pure numeric
+gate verifies R-hat/ESS/divergence/BFMI/depth evidence, and undefined BFMI values
+persist as null with INVESTIGATE status. Catastrophic future error blocks even when
+an inconsistent source flag says pass. Duplicate metric columns and undefined
+source values cannot silently become passing evidence. Checkpoints constrain test
+names and checksum refit evidence as well as their source tables.
+
+Measured checksum bottleneck: the actual 249,328,477-byte reviewed posterior needed
+249,333,327 bytes of peak Python allocation with `read_bytes()`, versus 267,553 bytes
+using standard-library `hashlib.file_digest`; digests matched exactly. Use that
+streaming helper across artifact consumers instead of caching unverified checksums.
+This reduces memory without changing artifact formats or weakening integrity.
+Nutpie also defaults to retaining warmup output; the reviewed file contains roughly
+107 MiB of warmup posterior arrays. New runs default to supported `save_warmup=False`,
+with an explicit troubleshooting option. A real sampling/reload test verifies that
+warmup groups are absent while posterior and observed-target evidence remain intact.
+Existing immutable runs are preserved.
+
+Numerical metric tests now cover large/small scales and unsigned inputs. Normalize
+absolute errors before squaring to avoid representable RMSE overflowing or
+underflowing; reject unrepresentable differences explicitly. The data contract
+blocks complex values rather than discarding their imaginary parts. Profiling omits
+unsupported complex distributions so that it can return a blocker report.
+
+Keep the modular monolith and isolated evaluation environment. No evidence here
+justifies a cache of mutable fitted MMM objects, a second model framework, or a
+workflow engine. Upstream repeated reference refits are a remaining runtime cost;
+changing that execution needs equivalence evidence and correct state isolation.
+Local manifests provide integrity against accidental/tampered components, not
+cryptographic authorization against an operator rewriting the entire evidence set.
+Shared or externally uploaded artifacts require a separately trusted ownership and
+record-hash boundary before public deployment. Phase 0 automation remains explicitly
+deferred; no GitHub changes were attempted.
+
+Upstream security boundary: the pinned evaluator's JSON configuration rehydrator
+falls back from `ast.literal_eval` to an expression `eval` with a restricted class
+registry. Our bridge does not expose that loader: construct approved native model
+objects from validated primitive `MMMConfig` values, then use
+`PyMCConfig.from_model_object`. Do not accept repr-encoded external model objects.
+A regression test rejects instruction-like prior text before external computation
+and traps any call to the upstream JSON expression loader. See the
+[pinned implementation](https://github.com/mutinex/mmm-eval/blob/71d20009feaa30dd9606ffface62f16fb1134265/mmm_eval/configs/rehydrators.py).

@@ -481,8 +481,10 @@ Phase 5 — Mutinex mmm-eval
 
 Status: implemented. All six pinned upstream tests, fold-safe scaling, raw-result
 persistence and deterministic release policy are available. The actual 20-refit
-smoke run produced BLOCK without execution errors; a longer production evaluation
-is running. Verified per-test checkpoints support explicit interruption recovery.
+smoke and production runs both produced BLOCK without execution errors. The
+production run completed 20 four-chain refits with 2,000 draws; placebo failure
+and refit divergences remain blocking. Verified per-test checkpoints support
+explicit interruption recovery.
 Downstream optimization recomputes policy from verified evidence and rejects BLOCK.
 
 Objective

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, replace
-from hashlib import sha256
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
@@ -25,7 +24,12 @@ from mmm_eval.core.validation_tests_models import (  # pyright: ignore[reportMis
 )
 from numpy.typing import NDArray
 
-from decisionguard.data.artifacts import load_model_inputs, source_code_hash, write_json
+from decisionguard.data.artifacts import (
+    file_hash,
+    load_model_inputs,
+    source_code_hash,
+    write_json,
+)
 from decisionguard.data.integrity import dataset_hash
 from decisionguard.evaluation.artifacts import UPSTREAM_COMMIT, source_evidence
 from decisionguard.evaluation.checkpoints import (
@@ -34,7 +38,11 @@ from decisionguard.evaluation.checkpoints import (
     save_checkpoint,
 )
 from decisionguard.evaluation.policy import assess_release
-from decisionguard.models.artifacts import load_mmm_record, validate_prior_sources
+from decisionguard.models.artifacts import (
+    load_mmm_record,
+    roi_sensitivity,
+    validate_prior_sources,
+)
 from decisionguard.models.bayesian import MMMConfig, build_mmm, posterior_diagnostics
 
 
@@ -131,6 +139,7 @@ def evaluate_mmm(
     draws: int | None = None,
     tune: int | None = None,
     resume: bool = False,
+    dataset: Path | None = None,
 ) -> dict[str, object]:
     """Evaluate training-only refits, keeping the main model's holdout sealed."""
     code_hash_at_start = source_code_hash()
@@ -149,7 +158,9 @@ def evaluate_mmm(
         tune=config.tune if tune is None else tune,
     )
     validate_prior_sources(model_record, alternative)
-    data, arrivals = load_model_inputs(Path(model_record["dataset"]["path"]))
+    data, arrivals = load_model_inputs(
+        dataset or Path(model_record["dataset"]["path"]), model_record["dataset"]
+    )
     if model_record["dataset"]["hash"] != dataset_hash(data):
         raise ValueError("model input identity changed")
     arrival_by_week = pd.Series(arrivals.to_numpy(), index=data["week"])
@@ -176,7 +187,10 @@ def evaluate_mmm(
     upstream_config.fit_config = upstream_config.fit_config.model_copy(
         update={
             "nuts_sampler": "nutpie",
-            "nuts_sampler_kwargs": {"maxdepth": config.max_tree_depth},
+            "nuts_sampler_kwargs": {
+                "maxdepth": config.max_tree_depth,
+                "save_warmup": config.save_warmup,
+            },
             "cores": 1,
         }
     )
@@ -195,15 +209,11 @@ def evaluate_mmm(
         )
     }
     identity: dict[str, object] = {
-        "model_record_hash": sha256(
-            (model_run / "model.json").read_bytes()
-        ).hexdigest(),
-        "sensitivity_record_hash": sha256(
-            (sensitivity_run / "model.json").read_bytes()
-        ).hexdigest(),
+        "model_record_hash": file_hash(model_run / "model.json"),
+        "sensitivity_record_hash": file_hash(sensitivity_run / "model.json"),
         "dataset_hash": dataset_hash(data),
         "code_hash": code_hash_at_start,
-        "lock_hash": sha256(Path("uv.lock").read_bytes()).hexdigest(),
+        "lock_hash": file_hash(Path("uv.lock")),
         "configuration": upstream_config.fit_config_dict,
         "runtime_versions": runtime_versions,
         "upstream_commit": UPSTREAM_COMMIT,
@@ -252,14 +262,7 @@ def evaluate_mmm(
         )
     )
     channels = list(config.channels)
-    sensitivity = {
-        name: abs(
-            alternative["channels"][name]["roi_mean"]
-            - model_record["channels"][name]["roi_mean"]
-        )
-        / abs(model_record["channels"][name]["roi_mean"])
-        for name in channels
-    }
+    sensitivity = roi_sensitivity(model_record, alternative)
     diagnostic = dict(model_record["diagnostics"])
     if alternative["diagnostics"]["diagnostic_status"] != "ACCEPTABLE" or any(
         cast(dict[str, Any], event["diagnostics"])["diagnostic_status"] != "ACCEPTABLE"
@@ -286,9 +289,7 @@ def evaluate_mmm(
         "version": version("mmm-eval"),
         "commit": UPSTREAM_COMMIT,
         "model_run": str(model_run.resolve()),
-        "model_record_hash": sha256(
-            (model_run / "model.json").read_bytes()
-        ).hexdigest(),
+        "model_record_hash": file_hash(model_run / "model.json"),
         "sensitivity_run": str(sensitivity_run.resolve()),
         "sensitivity": sensitivity,
         "policy": asdict(decision),
@@ -309,9 +310,7 @@ def evaluate_mmm(
             "Evaluation refits exclude the original sealed holdout",
         ],
         "code_hash": code_hash_at_start,
-        "raw_artifact_hash": sha256(
-            (output / "mmm_eval_raw.parquet").read_bytes()
-        ).hexdigest(),
+        "raw_artifact_hash": file_hash(output / "mmm_eval_raw.parquet"),
     }
     write_json(output / "evaluation.json", record)
     return record

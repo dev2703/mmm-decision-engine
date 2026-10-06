@@ -12,6 +12,7 @@ class MMMConfig:
     tune: int = 1500
     chains: int = 4
     seed: int = 42
+    save_warmup: bool = False
     holdout: int = 13
     adstock_lags: int = 16
     max_tree_depth: int = 12
@@ -31,19 +32,25 @@ class MMMConfig:
         ):
             if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        if type(self.save_warmup) is not bool:
+            raise ValueError("save_warmup must be boolean")
         if type(self.seed) is not int or self.seed < 0:
             raise ValueError("seed must be a nonnegative integer")
-        if not 0.5 < self.target_accept < 1:
+        if (
+            type(self.target_accept) not in (int, float)
+            or not 0.5 < self.target_accept < 1
+        ):
             raise ValueError("target_accept must lie between 0.5 and 1")
         if (
-            not self.channels
+            type(self.channels) not in (tuple, list)
+            or not self.channels
             or len(set(self.channels)) != len(self.channels)
             or not set(self.channels) <= set(SPEND_COLUMNS)
         ):
             raise ValueError("channels must be unique known spend columns")
         object.__setattr__(self, "channels", tuple(self.channels))
         if not all(
-            isfinite(v) and v > 0
+            type(v) in (int, float) and isfinite(v) and v > 0
             for v in (self.media_prior_mean, self.media_prior_sigma)
         ):
             raise ValueError("media prior parameters must be finite and positive")

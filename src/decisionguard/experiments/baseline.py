@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
@@ -13,6 +12,7 @@ from numpy.typing import NDArray
 
 from decisionguard.data.artifacts import (
     dataset_evidence,
+    file_hash,
     load_model_inputs,
     source_code_hash,
     write_json,
@@ -252,6 +252,7 @@ def run_baseline(
     hypothesis: str | None = None,
 ) -> BaselineResult:
     """Load through the quality gate, evaluate and persist a predictive-only run."""
+    code_hash_at_start = source_code_hash()
     data, availability = load_model_inputs(dataset)
     result = evaluate_baseline(data, config, availability)
     output.mkdir(parents=True, exist_ok=False)
@@ -313,13 +314,11 @@ def run_baseline(
         },
         "random_seed": 42 if result.config.model == "hist_gradient_boosting" else None,
         "dataset": dataset_evidence(dataset, data),
-        "code_hash": source_code_hash(),
-        "predictions_hash": sha256(
-            (output / "predictions.parquet").read_bytes()
-        ).hexdigest(),
+        "code_hash": code_hash_at_start,
+        "predictions_hash": file_hash(output / "predictions.parquet"),
     }
     lock = Path(__file__).resolve().parents[3] / "uv.lock"
     if lock.is_file():
-        record["dependency_lock_hash"] = sha256(lock.read_bytes()).hexdigest()
+        record["dependency_lock_hash"] = file_hash(lock)
     write_json(output / "experiment.json", record)
     return result

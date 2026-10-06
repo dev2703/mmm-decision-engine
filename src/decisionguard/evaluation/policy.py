@@ -5,6 +5,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from decisionguard.models.diagnostics import acceptable_diagnostics
+
 
 class ReleaseState(StrEnum):
     PASS = "PASS"
@@ -103,7 +105,9 @@ def assess_release(
                 "leakage", ReleaseState.BLOCK, "Known temporal or preprocessing leakage"
             )
         )
-    if diagnostics.get("diagnostic_status") != "ACCEPTABLE":
+    if diagnostics.get(
+        "diagnostic_status"
+    ) != "ACCEPTABLE" or not acceptable_diagnostics(diagnostics):
         reasons.append(
             ReleaseReason(
                 "sampler_diagnostics",
@@ -171,18 +175,19 @@ def assess_release(
                 )
             )
             continue
-        if item.passed:
+        catastrophic = (
+            item.test in ("holdout_accuracy", "cross_validation")
+            and item.metric in ("mape", "mean_mape")
+            and item.value > 30
+        )
+        if item.passed and not catastrophic:
             continue
         if item.test == "placebo":
             state = ReleaseState.BLOCK
         elif item.test in ("refresh_stability", "perturbation"):
             state = ReleaseState.RESTRICT
             restricted.update([item.channel] if item.channel is not None else channels)
-        elif (
-            item.test in ("holdout_accuracy", "cross_validation")
-            and item.metric in ("mape", "mean_mape")
-            and item.value > 30
-        ):
+        elif catastrophic:
             state = ReleaseState.BLOCK
         else:
             state = ReleaseState.WARN
@@ -190,7 +195,9 @@ def assess_release(
             ReleaseReason(
                 item.test,
                 state,
-                f"Upstream {item.metric} failed its source threshold",
+                f"{item.metric} exceeded the hard release limit"
+                if catastrophic
+                else f"Upstream {item.metric} failed its source threshold",
                 item.channel,
                 item.value,
             )

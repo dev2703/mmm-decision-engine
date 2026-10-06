@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import date, datetime
-from hashlib import sha256
+from hashlib import file_digest, sha256
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,12 @@ from decisionguard.data.integrity import (
     dataset_hash,
 )
 from decisionguard.data.synthetic import SyntheticDataset
+
+
+def file_hash(path: Path) -> str:
+    """SHA-256 with bounded memory, including large posterior artifacts."""
+    with path.open("rb") as stream:
+        return file_digest(stream, "sha256").hexdigest()
 
 
 def json_date(value: object) -> str:
@@ -60,13 +67,13 @@ def write_dataset(
         "simulation": simulation,
         "code_hash": source_code_hash(),
         "artifacts": {
-            name: sha256((output / name).read_bytes()).hexdigest()
+            name: file_hash(output / name)
             for name in ("raw.parquet", "clean.parquet", "quality.json")
         },
     }
     lock = Path(__file__).resolve().parents[3] / "uv.lock"
     if lock.is_file():
-        provenance["dependency_lock_hash"] = sha256(lock.read_bytes()).hexdigest()
+        provenance["dependency_lock_hash"] = file_hash(lock)
     write_json(output / "provenance.json", provenance)
     return result
 
@@ -92,7 +99,7 @@ def write_simulation(
     )
     provenance = json.loads((output / "provenance.json").read_text())
     for name in ("truth.parquet", "generation.json"):
-        provenance["artifacts"][name] = sha256((output / name).read_bytes()).hexdigest()
+        provenance["artifacts"][name] = file_hash(output / name)
     write_json(output / "provenance.json", provenance)
     return result
 
@@ -112,7 +119,7 @@ def load_quality(output: Path) -> dict[str, Any]:
     )
     for name in names:
         path = output / name
-        if sha256(path.read_bytes()).hexdigest() != provenance["artifacts"][name]:
+        if file_hash(path) != provenance["artifacts"][name]:
             raise ValueError(f"{name} artifact hash mismatch")
     report = json.loads((output / "quality.json").read_text())
     return report
@@ -127,9 +134,22 @@ def load_model_ready(output: Path) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
-def load_model_inputs(directory: Path) -> tuple[pd.DataFrame, pd.Series[pd.Timestamp]]:
+def load_model_inputs(
+    directory: Path, expected: Mapping[str, object] | None = None
+) -> tuple[pd.DataFrame, pd.Series[pd.Timestamp]]:
     """Verified clean data and conservatively aligned raw arrival timestamps."""
     data = load_model_ready(directory)
+    if expected is not None:
+        actual = dataset_evidence(directory, data)
+        for key in (
+            "hash",
+            "clean_artifact_hash",
+            "raw_artifact_hash",
+            "quality_artifact_hash",
+            "quality_status",
+        ):
+            if actual[key] != expected.get(key):
+                raise ValueError(f"model input identity changed: {key}")
     raw = pd.read_parquet(directory / "raw.parquet")
     if "available_at" not in raw:
         return data, data["week"] + pd.Timedelta(days=7)
@@ -146,7 +166,7 @@ def dataset_evidence(directory: Path, data: pd.DataFrame) -> dict[str, object]:
         "path": str(directory.resolve()),
         "hash": dataset_hash(data),
         **{
-            f"{kind}_artifact_hash": sha256((directory / name).read_bytes()).hexdigest()
+            f"{kind}_artifact_hash": file_hash(directory / name)
             for kind, name in (
                 ("clean", "clean.parquet"),
                 ("raw", "raw.parquet"),

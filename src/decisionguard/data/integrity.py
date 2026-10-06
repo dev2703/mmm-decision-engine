@@ -118,7 +118,9 @@ def profile_dataset(frame: pd.DataFrame) -> dict[str, object]:
     """Descriptive full-window profiling; never used to fit/remove/impute values."""
     if not frame.columns.is_unique:
         return {"row_count": len(frame), "column_names_unique": False}
-    numeric = frame.select_dtypes(include="number").replace([np.inf, -np.inf], np.nan)
+    numeric = frame.select_dtypes(include="number", exclude="complex").replace(
+        [np.inf, -np.inf], np.nan
+    )
     distributions: object = {}
     if len(numeric.columns) and len(frame):
         summary = numeric.describe().T
@@ -227,7 +229,11 @@ def clean_dataset(
         "Normalized ISO week labels to calendar dates and sorted chronologically",
     )
     for name in NUMERIC_COLUMNS:
-        clean[name] = pd.to_numeric(clean[name], errors="coerce").astype(float)
+        numeric = pd.to_numeric(clean[name], errors="coerce")
+        if pd.api.types.is_complex_dtype(numeric):
+            add("numeric_types", "BLOCKER", f"{name} must contain real-valued numbers")
+            return finish()
+        clean[name] = numeric.astype(float)
 
     if "spend_unit" in clean:
         units = clean["spend_unit"]

@@ -1,14 +1,21 @@
 """Planning from joint posterior draws after deterministic release checks."""
 
 from dataclasses import asdict
-from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
 from pymc_marketing.mmm import MMM
+from sklearn.preprocessing import (  # pyright: ignore[reportMissingTypeStubs]
+    MaxAbsScaler,  # pyright: ignore[reportMissingTypeStubs]
+)
 
-from decisionguard.data.artifacts import load_model_inputs, source_code_hash, write_json
+from decisionguard.data.artifacts import (
+    file_hash,
+    load_model_inputs,
+    source_code_hash,
+    write_json,
+)
 from decisionguard.data.integrity import dataset_hash
 from decisionguard.evaluation.artifacts import load_release
 from decisionguard.evaluation.policy import ReleaseState
@@ -21,13 +28,20 @@ from decisionguard.optimization.allocation import (
 
 
 def load_response(
-    model_run: Path, *, horizon: int = 13, draws: int = 200, seed: int = 42
+    model_run: Path,
+    *,
+    horizon: int = 13,
+    draws: int = 200,
+    seed: int = 42,
+    dataset: Path | None = None,
 ) -> tuple[PosteriorResponse, list[int]]:
     """Sample joint states without replacement; never use synthetic ground truth."""
     if type(draws) is not int or draws < 2 or type(seed) is not int or seed < 0:
         raise ValueError("at least two posterior draws and a nonnegative seed required")
     record = load_mmm_record(model_run)
-    data, _ = load_model_inputs(Path(record["dataset"]["path"]))
+    data, _ = load_model_inputs(
+        dataset or Path(record["dataset"]["path"]), record["dataset"]
+    )
     if dataset_hash(data) != record["dataset"]["hash"]:
         raise ValueError("model input identity changed")
     model = cast(Any, MMM.load(str(model_run / "posterior.nc")))
@@ -52,6 +66,13 @@ def load_response(
             posterior[name].transpose("chain", "draw", "channel"), dtype=np.float64
         ).reshape(count, len(channels))[selected]
 
+    for transform in (model.get_target_transformer(), model.channel_transformer):
+        if len(transform.steps) != 1 or not isinstance(
+            transform.named_steps.get("scaler"), MaxAbsScaler
+        ):
+            raise ValueError(
+                "planning requires recorded MaxAbs transforms without centering"
+            )
     target_scale = float(model.get_target_transformer().named_steps["scaler"].scale_[0])
     spend_scale = np.asarray(
         model.channel_transformer.named_steps["scaler"].scale_, dtype=np.float64
@@ -91,19 +112,15 @@ def optimize_run(
     result = analyze_allocation(response, constraints, release)
     result.update(
         {
-            "model_record_hash": sha256(
-                (model_run / "model.json").read_bytes()
-            ).hexdigest(),
-            "evaluation_record_hash": sha256(
-                (evaluation / "evaluation.json").read_bytes()
-            ).hexdigest(),
+            "model_record_hash": file_hash(model_run / "model.json"),
+            "evaluation_record_hash": file_hash(evaluation / "evaluation.json"),
             "release": asdict(release),
             "constraints": asdict(constraints),
             "horizon_weeks": horizon,
             "seed": seed,
             "posterior_indices": selected,
             "code_hash": source_code_hash(),
-            "dependency_lock_hash": sha256(Path("uv.lock").read_bytes()).hexdigest(),
+            "dependency_lock_hash": file_hash(Path("uv.lock")),
         }
     )
     output.mkdir(parents=True, exist_ok=False)

@@ -1,10 +1,9 @@
 """Compare real predictive runs while separating their information assumptions."""
 
 from dataclasses import replace
-from hashlib import sha256
 from pathlib import Path
 
-from decisionguard.data.artifacts import write_json
+from decisionguard.data.artifacts import file_hash, write_json
 from decisionguard.experiments.baseline import BaselineConfig, run_baseline
 
 
@@ -43,15 +42,11 @@ def run_comparison(
         rows.append(
             {
                 "model": model,
-                "prediction_context": (
-                    "forecast_from_origin"
-                    if model in ("seasonal_naive", "ets")
-                    else "conditional_on_realized_covariates"
-                ),
+                "prediction_context": context,
                 "cv": result.cv_metrics,
                 "holdout": result.holdout_metrics,
                 "experiment_path": str(record_path.resolve()),
-                "experiment_hash": sha256(record_path.read_bytes()).hexdigest(),
+                "experiment_hash": file_hash(record_path),
             }
         )
     winners = {context: min(values)[1] for context, values in scores.items()}

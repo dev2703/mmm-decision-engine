@@ -216,3 +216,13 @@ def test_mixed_timezones_and_numeric_dates_are_blocked() -> None:
     arrival = raw.assign(available_at="2022-03-14")
     arrival.loc[0, "available_at"] = "2022-01-10T00:00:00Z"
     assert clean_dataset(arrival).report.status == "BLOCKER"
+
+
+def test_complex_values_block_without_discarding_imaginary_part() -> None:
+    raw = generate_dataset(SyntheticConfig(weeks=10)).observations
+    raw["revenue"] = raw["revenue"].astype(complex) + 1j
+    original = raw.copy(deep=True)
+    result = clean_dataset(raw)
+    assert result.report.status == "BLOCKER"
+    assert any(issue.code == "numeric_types" for issue in result.report.issues)
+    pd.testing.assert_frame_equal(raw, original)

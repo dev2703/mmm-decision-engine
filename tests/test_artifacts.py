@@ -128,3 +128,38 @@ def test_incomplete_simulation_is_not_loadable(tmp_path: Path) -> None:
     write_dataset(raw, tmp_path / "partial", simulation=True)
     with pytest.raises(ValueError, match="incomplete"):
         load_model_ready(tmp_path / "partial")
+
+
+def test_model_identity_includes_raw_arrivals_even_when_clean_data_matches(
+    tmp_path: Path,
+) -> None:
+    import pandas as pd
+
+    from decisionguard.data.artifacts import dataset_evidence, load_model_inputs
+
+    raw = generate_dataset(SyntheticConfig(weeks=26)).observations
+    raw["available_at"] = raw["week"] + pd.Timedelta(days=14)
+    first, second = tmp_path / "first", tmp_path / "second"
+    write_dataset(raw, first)
+    clean = load_model_ready(first)
+    expected = dataset_evidence(first, clean)
+    raw["available_at"] = raw["week"] + pd.Timedelta(days=7)
+    write_dataset(raw, second)
+    pd.testing.assert_frame_equal(load_model_ready(second), clean)
+    with pytest.raises(ValueError, match="raw_artifact_hash"):
+        load_model_inputs(second, expected)
+
+
+def test_relocated_identical_dataset_keeps_identity_and_temporal_evidence(
+    tmp_path: Path,
+) -> None:
+    import shutil
+
+    from decisionguard.data.artifacts import dataset_evidence, load_model_inputs
+
+    first, moved = tmp_path / "first", tmp_path / "relocated"
+    write_dataset(generate_dataset(SyntheticConfig(weeks=26)).observations, first)
+    expected = dataset_evidence(first, load_model_ready(first))
+    shutil.copytree(first, moved)
+    data, arrivals = load_model_inputs(moved, expected)
+    assert len(data) == 26 and len(arrivals) == 26

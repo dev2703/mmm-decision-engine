@@ -93,6 +93,7 @@ def main() -> None:
     training.add_argument("--tune", type=int)
     training.add_argument("--chains", type=int)
     training.add_argument("--seed", type=int)
+    training.add_argument("--save-warmup", action="store_true", default=None)
     training.add_argument("--holdout", type=int)
     training.add_argument("--target-accept", type=float)
     training.add_argument("--adstock-lags", type=int)

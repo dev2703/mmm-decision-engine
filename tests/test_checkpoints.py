@@ -53,3 +53,26 @@ def test_changed_checkpoint_fails_instead_of_recomputing_silently(
     (tmp_path / "placebo.parquet").write_bytes(b"corruption")
     with pytest.raises(ValueError, match="checkpoint changed"):
         load_checkpoint(tmp_path, "placebo")
+
+
+def test_changed_refit_evidence_cannot_reuse_checkpoint(tmp_path: Path) -> None:
+    import json
+
+    save_checkpoint(
+        tmp_path, "placebo", pd.DataFrame({"value": [1]}), [{"divergences": 20}]
+    )
+    path = tmp_path / "placebo.json"
+    record = json.loads(path.read_text())
+    record["refits"][0]["divergences"] = 0
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="refits changed"):
+        load_checkpoint(tmp_path, "placebo")
+
+
+def test_checkpoint_name_cannot_escape_run_directory(tmp_path: Path) -> None:
+    for name in ("../outside", "/absolute", "unknown_test"):
+        with pytest.raises(ValueError, match="unknown evaluation test"):
+            save_checkpoint(tmp_path, name, pd.DataFrame(), [])
+        with pytest.raises(ValueError, match="unknown evaluation test"):
+            load_checkpoint(tmp_path, name)
+    assert list(tmp_path.iterdir()) == []

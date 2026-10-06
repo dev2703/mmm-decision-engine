@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,6 +16,7 @@ from pymc_marketing.prior import Prior
 
 from decisionguard.data.artifacts import (
     dataset_evidence,
+    file_hash,
     load_model_inputs,
     source_code_hash,
     write_json,
@@ -24,6 +24,7 @@ from decisionguard.data.artifacts import (
 from decisionguard.data.integrity import CONTROL_COLUMNS, SPEND_COLUMNS
 from decisionguard.experiments.metrics import forecast_metrics
 from decisionguard.models.config import MMMConfig
+from decisionguard.models.diagnostics import acceptable_diagnostics
 
 
 def prepare_mmm_inputs(
@@ -104,33 +105,25 @@ def posterior_diagnostics(idata: Any) -> dict[str, object]:
     max_rhat = float(values[:, 0].max()) if finite else None
     min_bulk = float(values[:, 1].min()) if finite else None
     min_tail = float(values[:, 2].min()) if finite else None
-    adequate = (
-        finite
-        and max_rhat is not None
-        and max_rhat <= 1.01
-        and min_bulk is not None
-        and min_bulk >= 400
-        and min_tail is not None
-        and min_tail >= 400
-        and divergences == 0
-        and bool(np.isfinite(bfmi).all())
-        and float(bfmi.min()) >= 0.3
-        and maxdepth == 0
-    )
-    return {
+    diagnostic: dict[str, object] = {
         "sufficient_chains_draws": True,
-        "diagnostic_status": "ACCEPTABLE" if adequate else "INVESTIGATE",
         "max_rhat": max_rhat,
         "min_ess_bulk": min_bulk,
         "min_ess_tail": min_tail,
         "divergences": divergences,
-        "bfmi_by_chain": bfmi.tolist(),
+        "bfmi_by_chain": [
+            float(value) if np.isfinite(value) else None for value in bfmi
+        ],
         "maxdepth_reached": maxdepth,
         "maximum_tree_depth_used": int(idata.sample_stats.depth.max()),
         "parameter_summary": json.loads(
             summary.replace([np.inf, -np.inf], np.nan).to_json(orient="index")
         ),
     }
+    diagnostic["diagnostic_status"] = (
+        "ACCEPTABLE" if acceptable_diagnostics(diagnostic) else "INVESTIGATE"
+    )
+    return diagnostic
 
 
 def train_mmm(
@@ -180,7 +173,10 @@ def train_mmm(
         chains=config.chains,
         cores=1,
         nuts_sampler="nutpie",
-        nuts_sampler_kwargs={"maxdepth": config.max_tree_depth},
+        nuts_sampler_kwargs={
+            "maxdepth": config.max_tree_depth,
+            "save_warmup": config.save_warmup,
+        },
         target_accept=config.target_accept,
         random_seed=config.seed,
         progressbar=False,
@@ -333,13 +329,11 @@ def train_mmm(
             "No optimization before mmm-eval and deterministic release gating",
         ],
         "artifacts": {
-            name: sha256((output / name).read_bytes()).hexdigest()
+            name: file_hash(output / name)
             for name in ("posterior.nc", "channel_draws.npz", "predictions.parquet")
         },
     }
     lock = Path(__file__).resolve().parents[3] / "uv.lock"
-    record["dependency_lock_hash"] = (
-        sha256(lock.read_bytes()).hexdigest() if lock.exists() else None
-    )
+    record["dependency_lock_hash"] = file_hash(lock) if lock.exists() else None
     write_json(output / "model.json", record)
     return record

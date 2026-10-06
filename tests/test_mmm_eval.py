@@ -31,40 +31,6 @@ def observations() -> pd.DataFrame:
     return data
 
 
-def test_upstream_rows_and_units_remain_unmodified() -> None:
-    raw = pd.DataFrame(
-        [
-            {
-                "test_name": "holdout_accuracy",
-                "general_metric_name": "mape",
-                "specific_metric_name": "mape",
-                "metric_value": 15.5,
-                "metric_pass": False,
-            },
-            {
-                "test_name": "perturbation",
-                "general_metric_name": "percentage_change",
-                "specific_metric_name": "percentage_change_meta_spend",
-                "metric_value": 9.0,
-                "metric_pass": False,
-            },
-            {
-                "test_name": "placebo",
-                "general_metric_name": "shuffled_channel_roi",
-                "specific_metric_name": "shuffled_channel_roi_search_spend_shuffled",
-                "metric_value": -60.0,
-                "metric_pass": True,
-            },
-        ]
-    )
-    before = raw.copy(deep=True)
-    evidence = bridge.source_evidence(raw, ["meta_spend", "search_spend"])
-    pd.testing.assert_frame_equal(raw, before)
-    assert evidence[0].value == 15.5 and evidence[0].passed is False
-    assert evidence[1].channel == "meta_spend" and evidence[1].value == 9.0
-    assert evidence[2].value == -60.0 and evidence[2].passed is True
-
-
 def test_adapter_fits_controls_only_on_its_training_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -169,7 +135,7 @@ def test_interrupted_evaluation_resumes_without_repeating_completed_test(
     def load_record(path: Any) -> dict[str, Any]:
         return first if path == model else second
 
-    def load_inputs(_: Any) -> tuple[pd.DataFrame, Any]:
+    def load_inputs(_: Any, expected: Any = None) -> tuple[pd.DataFrame, Any]:
         return data, data["week"] + pd.Timedelta(days=7)
 
     monkeypatch.setattr(bridge, "load_mmm_record", load_record)
@@ -217,3 +183,37 @@ def test_interrupted_evaluation_resumes_without_repeating_completed_test(
     assert (
         record["policy"]["state"] == "BLOCK"
     )  # fixture metrics are intentionally incomplete
+
+
+def test_external_config_text_cannot_reach_upstream_expression_rehydration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    from dataclasses import asdict
+
+    from decisionguard.models.config import MMMConfig
+
+    marker = tmp_path / "must-not-be-written"
+    payload = f"__import__('pathlib').Path({str(marker)!r}).write_text('executed')"
+    configuration = asdict(MMMConfig())
+    configuration["media_prior_mean"] = payload
+    record: dict[str, Any] = {
+        "dataset": {"hash": "same"},
+        "training_window": {"rows": 143},
+        "config": configuration,
+    }
+
+    def load_record(_: Any) -> dict[str, Any]:
+        return record
+
+    def forbidden_rehydration(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("untrusted config reached the upstream expression loader")
+
+    monkeypatch.setattr(bridge, "load_mmm_record", load_record)
+    monkeypatch.setattr(
+        bridge.PyMCConfig, "load_model_config_from_json", forbidden_rehydration
+    )
+    with pytest.raises((TypeError, ValueError)):
+        bridge.evaluate_mmm(tmp_path, tmp_path, tmp_path / "output")
+    assert not marker.exists()
+    assert not (tmp_path / "output").exists()

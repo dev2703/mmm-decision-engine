@@ -6,7 +6,9 @@ a budget recommendation, then propagate uncertainty into constrained decisions.
 Phases 1 (synthetic marketing world) and 2 (data integrity) are implemented.
 Phase 3 predictive benchmarks and auditable temporal comparisons are implemented.
 Phase 4 Bayesian candidates and prior sensitivity are implemented.
-External evaluation, release gating and the decision/product phases follow.
+Phase 5 external evaluation and deterministic release gating are implemented.
+The executed production evaluation is BLOCK; no candidate is released for spend
+changes. Later decision/backend work exists but remains under development.
 
 ## Local setup
 
@@ -310,3 +312,12 @@ Use `GET /model-runs/{id}` or `GET /projects/{id}/model-runs` to inspect lifecyc
 and evidence. A successful job remains an unevaluated candidate; job success is
 not scientific release. A crashed process may leave RUNNING metadata; current
 recovery is an explicit operator task, never automatic duplicate execution.
+
+Default Bayesian runs discard warmup output using Nutpie's supported option.
+Use `--save-warmup` when investigating adaptation. Posterior draws, sampling
+diagnostics, prior checks and observed training targets remain persisted.
+
+The production evaluation reproduced here used 2,000 draws, 1,500 tuning steps
+and four chains for each of 20 actual refits. It returned BLOCK with no test
+execution errors: failed placebo falsification and refit divergences remain
+visible. Prediction accuracy cannot authorize a release over those failures.

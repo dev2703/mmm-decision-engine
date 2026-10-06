@@ -7,7 +7,8 @@ from typing import Any
 
 import pandas as pd
 
-from decisionguard.data.artifacts import write_json
+from decisionguard.data.artifacts import file_hash, write_json
+from decisionguard.evaluation.policy import REQUIRED_TESTS
 
 
 def initialize_progress(
@@ -29,14 +30,22 @@ def initialize_progress(
 def load_checkpoint(
     output: Path, test: str
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]] | None:
+    if test not in REQUIRED_TESTS:
+        raise ValueError("unknown evaluation test")
     manifest = output / f"{test}.json"
     if not manifest.exists():
         return None
     record = json.loads(manifest.read_text())
     table = output / f"{test}.parquet"
-    if sha256(table.read_bytes()).hexdigest() != record["table_hash"]:
+    if file_hash(table) != record["table_hash"]:
         raise ValueError(f"evaluation checkpoint changed: {test}")
-    return pd.read_parquet(table), record["refits"]
+    refits = record["refits"]
+    digest = sha256(
+        json.dumps(refits, sort_keys=True, allow_nan=False).encode()
+    ).hexdigest()
+    if digest != record["refits_hash"]:
+        raise ValueError(f"evaluation checkpoint refits changed: {test}")
+    return pd.read_parquet(table), refits
 
 
 def save_checkpoint(
@@ -45,12 +54,20 @@ def save_checkpoint(
     table: pd.DataFrame,
     refits: list[dict[str, object]],
 ) -> None:
+    if test not in REQUIRED_TESTS:
+        raise ValueError("unknown evaluation test")
     table_path = output / f"{test}.parquet"
     table.to_parquet(table_path, index=False)
     # Publish the manifest last and atomically: a partial test is never reused.
     temporary = output / f"{test}.json.tmp"
     write_json(
         temporary,
-        {"table_hash": sha256(table_path.read_bytes()).hexdigest(), "refits": refits},
+        {
+            "table_hash": file_hash(table_path),
+            "refits": refits,
+            "refits_hash": sha256(
+                json.dumps(refits, sort_keys=True, allow_nan=False).encode()
+            ).hexdigest(),
+        },
     )
     temporary.replace(output / f"{test}.json")
