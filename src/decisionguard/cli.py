@@ -1,4 +1,4 @@
-"""Reproducible local data workflows; no training or model APIs yet."""
+"""Reproducible local data and predictive experiment workflows."""
 
 import argparse
 import json
@@ -13,6 +13,7 @@ from decisionguard.data.corruption import CorruptionConfig, corrupt_dataset
 from decisionguard.data.integrity import IntegrityConfig
 from decisionguard.data.synthetic import SyntheticConfig, generate_dataset
 from decisionguard.experiments.baseline import BaselineConfig, run_baseline
+from decisionguard.experiments.comparison import run_comparison
 
 
 def main() -> None:
@@ -46,16 +47,46 @@ def main() -> None:
     imported.add_argument("input", type=Path)
     imported.add_argument("--expected-start")
     imported.add_argument("--expected-end")
-    baseline = commands.add_parser(
-        "baseline", help="Evaluate seasonal-naive temporal forecasts"
+    baseline = commands.add_parser("baseline", help="Evaluate one predictive benchmark")
+    compare = commands.add_parser(
+        "compare", help="Run the predictive model ladder on identical windows"
     )
-    baseline.add_argument("--dataset", type=Path, required=True)
-    baseline.add_argument("--output", type=Path, required=True)
-    baseline.add_argument("--period", type=int, default=52)
-    baseline.add_argument("--initial-train", type=int, default=52)
-    baseline.add_argument("--horizon", type=int, default=13)
-    baseline.add_argument("--gap", type=int, default=0)
+    for command in (baseline, compare):
+        command.add_argument("--dataset", type=Path, required=True)
+        command.add_argument("--output", type=Path, required=True)
+        command.add_argument("--period", type=int, default=52)
+        command.add_argument(
+            "--initial-train", type=int, default=104 if command is compare else 52
+        )
+        command.add_argument("--horizon", type=int, default=13)
+        command.add_argument("--gap", type=int, default=0)
+    baseline.add_argument(
+        "--model",
+        choices=[
+            "seasonal_naive",
+            "ets",
+            "ridge_raw",
+            "ridge_domain",
+            "hist_gradient_boosting",
+        ],
+        default="seasonal_naive",
+    )
     baseline.add_argument("--hypothesis")
+    training = commands.add_parser(
+        "train", help="Fit and audit a Bayesian MMM candidate"
+    )
+    training.add_argument("--dataset", type=Path, required=True)
+    training.add_argument("--output", type=Path, required=True)
+    training.add_argument("--draws", type=int, default=2000)
+    training.add_argument("--tune", type=int, default=1500)
+    training.add_argument("--chains", type=int, default=4)
+    training.add_argument("--seed", type=int, default=42)
+    training.add_argument("--holdout", type=int, default=13)
+    training.add_argument("--target-accept", type=float, default=0.99)
+    training.add_argument("--adstock-lags", type=int, default=16)
+    training.add_argument("--max-tree-depth", type=int, default=12)
+    training.add_argument("--media-prior-mean", type=float, default=0.15)
+    training.add_argument("--media-prior-sigma", type=float, default=0.1)
     for command in (prepare, imported):
         command.add_argument("--output", type=Path, required=True)
         command.add_argument("--as-of")
@@ -67,6 +98,50 @@ def main() -> None:
         )
     args = parser.parse_args()
     try:
+        if args.command == "train":
+            from decisionguard.models.bayesian import MMMConfig, train_mmm
+
+            record = train_mmm(
+                args.dataset,
+                args.output,
+                MMMConfig(
+                    draws=args.draws,
+                    tune=args.tune,
+                    chains=args.chains,
+                    seed=args.seed,
+                    holdout=args.holdout,
+                    target_accept=args.target_accept,
+                    adstock_lags=args.adstock_lags,
+                    max_tree_depth=args.max_tree_depth,
+                    media_prior_mean=args.media_prior_mean,
+                    media_prior_sigma=args.media_prior_sigma,
+                ),
+            )
+            print(
+                json.dumps(
+                    {
+                        "model_status": record["model_status"],
+                        "diagnostics": record["diagnostics"],
+                    }
+                )
+            )
+            return
+        if args.command == "compare":
+            print(
+                json.dumps(
+                    run_comparison(
+                        args.dataset,
+                        args.output,
+                        BaselineConfig(
+                            period=args.period,
+                            initial_train=args.initial_train,
+                            horizon=args.horizon,
+                            gap=args.gap,
+                        ),
+                    )
+                )
+            )
+            return
         if args.command == "baseline":
             result = run_baseline(
                 args.dataset,
@@ -76,6 +151,7 @@ def main() -> None:
                     initial_train=args.initial_train,
                     horizon=args.horizon,
                     gap=args.gap,
+                    model=args.model,
                 ),
                 hypothesis=args.hypothesis,
             )

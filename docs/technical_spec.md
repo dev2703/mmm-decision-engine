@@ -671,6 +671,98 @@ temporal tuning require a shared interface; do not scaffold that interface now.
 The remaining Phase 3 models must share temporal/availability boundaries and fit
 all learned preprocessing on their training folds only.
 
+### ADR: classical ETS comparison and research
+
+Additive error/trend/seasonal ETS is the first classical model. The synthetic
+revenue contains changing level and additive annual seasonality, so additive ETS
+fits the generative story better than imposing stationarity on raw revenue.
+Stationary innovations remain an assumption, not a proven property; structural
+shifts, promotions and changing variance can invalidate it. We do not choose
+ARIMA differencing orders from the sealed holdout or add tests with IID assumptions.
+A seasonal fit requires at least two complete training cycles (104 weeks at period
+52); seasonal naive must use the same starting window for a fair comparison.
+
+Statsmodels supplies estimation and exact 90% innovation prediction intervals.
+Its installed 0.14.6 interval method needs a pandas Series, as a NumPy input failed
+with an index AttributeError in an executed probe. Optimization nonconvergence and
+nonfinite predictions fail the run. Record residual mean, Ljung–Box diagnostic lag,
+statistic and p-value, and test interval coverage by fold. The Ljung–Box value is
+exploratory (no fitted-model degrees-of-freedom correction), not a release gate.
+Intervals condition on estimated parameters and omit their uncertainty; they are
+not posterior MMM intervals or proof of causal validity.
+
+Alternatives: SARIMA adds differencing/order choices and seasonal computation
+without evidence of benefit yet. A separate temporal evaluator would duplicate
+leakage guards; the two baselines share the existing evaluator and artifact path.
+Revisit ETS when CV, residuals or coverage indicate its assumptions fail.
+
+Research sources: [Statsmodels ETS](https://www.statsmodels.org/stable/examples/notebooks/generated/ets.html)
+and [scikit-learn leakage guidance](https://scikit-learn.org/stable/common_pitfalls.html).
+Pipelines should own fold-fitted scaling in the next regularized benchmark.
+
+### ADR: Phase 3 conditional regression comparison
+
+Ridge on raw spend and controls, Ridge on domain adstock/saturation features, and
+Histogram Gradient Boosting share the baseline's outer temporal windows and input
+quality gate. Every representation includes trend and calendar Fourier terms.
+Domain carryover uses fixed decay 0.5; each channel's saturation half-point is its
+training-prefix median carryover (with a one-AUD lower bound). Neither transform
+reads the simulator's privileged parameters or truth. This simple misspecified
+representation is an experiment to test, not a promise of improvement.
+
+Ridge uses a StandardScaler/Ridge pipeline, refitted per outer fold. Alpha from
+0.1/1/10/100 is selected by MAE on the last horizon of the outer training prefix,
+using a separate preceding inner prefix and the configured availability gap.
+Inner saturation references and scaler fitting exclude inner validation. Both
+inner and outer training observations must be available at their respective
+origins. Audit selected alpha, inner scores, references and outer scaler state.
+Histogram Gradient Boosting uses 100 iterations, seven leaves, minimum ten rows
+per leaf, L2 regularization one, seed 42, and no automatic early stopping; its
+otherwise random validation split would violate the temporal design. Scaling
+is unnecessary for this tree model. Its fixed configuration is not holdout tuned.
+
+Important information contract: regressors condition on realized test spend and
+controls. These covariates are not claimed available at the historical forecast
+origin. Their outputs are conditional predictions. Seasonal naive and ETS forecast
+from historical revenue alone. `comparison.json` keeps these contexts separate,
+selects the lowest CV MAE within each, and then reports the untouched holdout.
+There is no mixed leaderboard or automatic causal/decision-model promotion.
+Actual planned covariates or their forecast uncertainty would be required to turn
+conditional predictions into operational multiweek forecasts.
+
+Executed seed-42, 156-week experiment with initial training 104 and horizon 13:
+
+| Context | Model | CV MAE AUD/week | Holdout MAE AUD/week |
+| --- | --- | ---: | ---: |
+| Origin-only forecast | Seasonal naive | 13,373.06 | 14,230.85 |
+| Origin-only forecast | Additive ETS | 21,631.41 | 13,189.64 |
+| Conditional prediction | Raw Ridge | 2,705.12 | 2,803.76 |
+| Conditional prediction | Domain Ridge | 3,318.31 | 3,020.69 |
+| Conditional prediction | Histogram Gradient Boosting | 7,717.58 | 5,882.56 |
+
+Interpretation: retain seasonal naive and raw Ridge in their respective roles.
+ETS' better holdout does not override worse CV. Fixed-decay feature engineering
+was not beneficial on this run, and tree complexity was not justified. Shared
+trend and known control covariates explain much of raw Ridge's advantage; this
+does not establish causal media effects. Additional seeds, altered carryover,
+and regimes can change the ranking; this is not a universal model claim.
+Quality tests show explicit unit/alias/duplicate repairs recover clean predictive
+outputs, while unresolved target/currency/calendar defects block all experiments.
+
+Native thread pools are limited to one during fit/predict for these tiny datasets.
+In a restricted macOS sandbox, Joblib physical-core discovery emitted a warning;
+`LOKY_MAX_CPU_COUNT=1 OMP_NUM_THREADS=1` makes the intended resource limit explicit
+for verification and reproducible demos. The warning is not filtered or ignored.
+Partial comparisons retain completed run artifacts but have no `comparison.json`;
+that final summary is the completion marker. New output directories prevent
+silently overwriting previous evidence.
+
+Sources: [scikit-learn pipelines and leakage](https://scikit-learn.org/stable/common_pitfalls.html),
+[StandardScaler](https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.StandardScaler.html),
+and [Histogram Gradient Boosting](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingRegressor.html).
+Revisit fold-specific hyperparameter grids only through temporal CV; never choose
+feature representations or priors by inspecting the final holdout repeatedly.
+
 16. Model Ladder
 
 Seasonal Naive
@@ -1430,3 +1522,109 @@ failure behaviour is clear;
 useful logs exist;
 
 simplification review has occurred.
+
+### Architecture research: observed compatibility and resource costs
+
+Phase 4 dependency resolution alone was insufficient: PyMC-Marketing 0.14.1
+imported a removed PyTensor compatibility symbol when paired with PyTensor 2.38.
+Pinning PyMC 5.23 / PyTensor 2.31 restored imports. That marketing version is
+selected to match `mmm-eval` commit `71d20009feaa30dd9606ffface62f16fb1134265`,
+whose source requires PyMC-Marketing <0.15. Updating to the current marketing major
+would require an evaluated upstream adapter migration, not a silent version bump.
+
+On the actual macOS toolchain, PyTensor's C build failed with `library 'd64' not
+found`. The supported `PYTENSOR_FLAGS=cxx=` fallback avoids that linker. Interpreted
+NUTS emitted numerical proposal warnings and was slower; the official PyMC Nutpie
+sampler provides a compiled Numba backend. A convolution operation can fall back
+to object mode, with an unsuppressed library warning. This is a performance risk,
+separate from R-hat/ESS/divergences; real scientific tests must still execute.
+Compiled Linux deployment should be verified separately rather than assuming
+macOS fallback performance represents production.
+
+Sources: [upstream linker issue](https://github.com/pymc-devs/pytensor/issues/2268),
+[version-pinned mmm-eval requirements](https://github.com/mutinex/mmm-eval/blob/71d20009feaa30dd9606ffface62f16fb1134265/pyproject.toml),
+and [PyMC-Marketing model workflow](https://www.pymc-marketing.io/en/0.14.1/notebooks/mmm/mmm_example.html).
+
+The same `mmm-eval` source imports Meridian/TensorFlow through adapter/config
+initializers even for the PyMC path. This increases install size and cold-start
+cost without a second framework requirement in our product. Prefer isolating
+heavy evaluation in CLI/job execution and retaining raw evaluation artifacts for
+the API; do not fork the upstream scientific tests or build microservices solely
+to hide package imports. Revisit when upstream supports optional framework imports.
+
+### ADR: auditable Bayesian MMM candidate (Phase 4)
+
+The likelihood is Normal revenue, with an intercept, linear standardized controls
+(price, promotion, macro, competitor and trend), two yearly Fourier harmonics,
+and positive media contributions. PyMC-Marketing supplies unnormalized finite
+geometric adstock and Michaelis–Menten saturation. Unlike the infinite-carryover
+DGP, this model truncates history at 16 lags. Calendar seasonality uses the library's
+yearly calendar rather than silently reading the privileged simulator parameters.
+Controls/trend are centered and scaled using only the training prefix; the library
+fits channel and target MaxAbs scaling on that same prefix. Holdout is the final
+13 weeks; prediction explicitly carries forward the last training lag history.
+Realized holdout covariates condition predictions and are not origin-known inputs.
+
+Priors, in target-scaled units: intercept Normal(0.5, 0.25), signed controls and
+Fourier coefficients Normal(0, 0.1), noise HalfNormal(0.05), channel carryover
+Beta(2, 2), saturation amplitude Gamma(mean 0.15, SD 0.1), and saturation half-point
+HalfNormal(1). These regularize noisy weekly fits while allowing wide media
+uncertainty. Positive media priors encode a monotone response assumption; recovered
+positive media means alone cannot validate incrementality. Signed-control recovery
+is checked under symmetric priors. No ground-truth effects configure the model.
+
+Generate 200 prior predictive draws before sampling. Reject nonfinite draws, more
+than 5% negative scaled revenue, or a 99th percentile above five times training
+maximum revenue. These are coarse simulation plausibility screens, not empirically
+calibrated commercial release thresholds. Retain the complete prior draws in the
+posterior NetCDF of successful candidates.
+
+Default production sampling: four chains, 2,000 draws, 1,500 tuning steps, seed 42,
+Nutpie, one core, target acceptance 0.99, maximum tree depth 12. Earlier executed
+500-draw / acceptance-0.95 fits showed divergences. Acceptance 0.99 removed those,
+but the default depth ten still saturated; the increased depth is independently
+checked. Diagnostic acceptance requires finite parameter diagnostics, R-hat at
+most 1.01, minimum bulk/tail ESS 400, zero divergences, BFMI at least 0.3 in each
+chain and zero maximum-depth hits. A one-chain smoke run is explicitly INCOMPLETE.
+These checks do not by themselves release a model for decisions.
+
+Save `posterior.nc`, `channel_draws.npz`, `predictions.parquet` and a completion
+manifest `model.json`. Preserve original-unit channel contribution and ROI draws,
+90% prediction intervals, in-sample/holdout metrics and coverage, parameter
+summaries, channel-contribution correlations, and conditional saturation curves.
+Their x-axis is adstocked AUD spend, not raw weekly budget; the optimizer must
+account for the finite carryover process when evaluating allocations. ROI here is
+modeled attributed revenue divided by historical spend, not experimentally proven
+incremental profit or marginal return.
+
+An executed regression test found that posterior predictive sampling can replace
+`idata.observed_data` with the library's dummy targets. Preserve the real fitted
+observations before prediction and restore that group before saving. Reload tests
+compare it against actual target-scaled training revenue. Build/prior sampling use
+the real target from the start, avoiding the documented placeholder-target hazard.
+Artifacts are checksum-verified before consumption; the model record retains input
+quality evidence, training window, configuration, preprocessing state, source hash
+at job start and dependency-lock hash. Candidates remain CANDIDATE_UNEVALUATED
+regardless of predictive accuracy; external validation and release policy follow.
+
+Prior sensitivity compares the same data/window/channels under amplitude mean
+0.25 and SD 0.15, retaining both runs and their sampler diagnostics. Similar holdout
+error can coexist with materially different channel ROI. The original exploratory
+runs are retained, including diagnostics failures; they are not silently upgraded
+or substituted as released model evidence.
+
+
+Final executed default-prior run with 2,000 draws per chain: R-hat maximum
+1.00334, minimum bulk ESS 1,350.31, minimum tail ESS 1,641.75, zero divergences,
+zero depth-limit hits, and minimum BFMI 0.83717. The wider-prior 2,000-draw run
+also passes the diagnostic screen. The 1,000-draw deeper-tree repeat still failed
+intercept R-hat, which motivated longer chains rather than a relaxed threshold.
+These are sampling checks, not release or causal-validity claims.
+
+The first optional evaluation install exposed a real macOS import deadlock in
+TensorFlow 2.20 (`RAW: Lock blocking`), independently reproduced with a bounded
+30-second subprocess and a faulthandler stack in TensorFlow's native wrapper.
+The [upstream TensorFlow issue](https://github.com/tensorflow/tensorflow/issues/99464)
+reports the same failure. Pin TensorFlow/tf-keras to 2.19 in the evaluation group;
+verify import and rerun the scientific suite after the resulting NumPy change.
+An available wheel or a successful dependency solve is not a runtime check.

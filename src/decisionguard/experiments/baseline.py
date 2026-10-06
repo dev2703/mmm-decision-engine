@@ -1,18 +1,24 @@
-"""Seasonal-naive baseline and a minimal auditable temporal experiment."""
+"""Leakage-safe temporal evaluation and auditable predictive experiments."""
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
-from decisionguard.data.artifacts import load_model_ready, source_code_hash, write_json
-from decisionguard.data.integrity import dataset_hash
+from decisionguard.data.artifacts import (
+    dataset_evidence,
+    load_model_inputs,
+    source_code_hash,
+    write_json,
+)
+from decisionguard.experiments.ets import ets_forecast
+from decisionguard.experiments.regression import regression_forecast
 
 
 @dataclass(frozen=True)
@@ -21,6 +27,9 @@ class BaselineConfig:
     initial_train: int = 52
     horizon: int = 13
     gap: int = 0
+    model: Literal[
+        "seasonal_naive", "ets", "ridge_raw", "ridge_domain", "hist_gradient_boosting"
+    ] = "seasonal_naive"
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -32,6 +41,16 @@ class BaselineConfig:
                 raise ValueError(f"{name} must be a positive integer")
         if type(self.gap) is not int or self.gap < 0:
             raise ValueError("gap must be a nonnegative integer")
+        if self.model not in (
+            "seasonal_naive",
+            "ets",
+            "ridge_raw",
+            "ridge_domain",
+            "hist_gradient_boosting",
+        ):
+            raise ValueError("unsupported baseline model")
+        if self.model == "ets" and self.initial_train < 2 * self.period:
+            raise ValueError("seasonal ETS requires two complete training seasons")
         if self.initial_train < self.period:
             raise ValueError("initial_train must contain at least one complete season")
 
@@ -155,22 +174,57 @@ def evaluate_baseline(
             raise ValueError(
                 "training records unavailable at forecast origin; increase gap"
             )
-        predicted = seasonal_naive(
-            revenue[: fold.train_end], config.gap + config.horizon, config.period
-        )[config.gap :]
-        actual = revenue[fold.test_start : fold.test_end]
-        frames.append(
-            pd.DataFrame(
+        diagnostics: dict[str, object] = {}
+        if config.model == "ets":
+            forecast, diagnostics = ets_forecast(
+                revenue[: fold.train_end], config.gap + config.horizon, config.period
+            )
+            forecast = forecast.iloc[config.gap :].reset_index(drop=True)
+        elif config.model in ("ridge_raw", "ridge_domain", "hist_gradient_boosting"):
+            if config.model.startswith("ridge"):
+                inner_start = fold.train_end - config.horizon
+                inner_end = inner_start - config.gap
+                if (
+                    inner_end <= 0
+                    or (availability[:inner_end] > dates[inner_start]).any()
+                ):
+                    raise ValueError(
+                        "inner training unavailable at validation origin; increase gap"
+                    )
+            forecast, diagnostics = regression_forecast(
+                data.iloc[: fold.train_end],
+                data.iloc[: fold.test_end].drop(columns="revenue"),
+                config.period,
+                config.model,
+                config.horizon,
+                config.gap,
+            )
+            forecast = forecast.iloc[config.gap :].reset_index(drop=True)
+        else:
+            forecast = pd.DataFrame(
                 {
-                    "week": dates[fold.test_start : fold.test_end],
-                    "fold": fold_id,
-                    "split": fold.kind,
-                    "actual": actual,
-                    "predicted": predicted,
-                    "residual": actual - predicted,
+                    "predicted": seasonal_naive(
+                        revenue[: fold.train_end],
+                        config.gap + config.horizon,
+                        config.period,
+                    )[config.gap :]
                 }
             )
-        )
+        predicted = forecast["predicted"].to_numpy(dtype=np.float64)
+        actual = revenue[fold.test_start : fold.test_end]
+        forecast["week"] = dates[fold.test_start : fold.test_end]
+        forecast["fold"] = fold_id
+        forecast["split"] = fold.kind
+        forecast["actual"] = actual
+        forecast["residual"] = actual - predicted
+        if config.model == "ets":
+            inside = (actual >= forecast["lower_90"].to_numpy(dtype=np.float64)) & (
+                actual <= forecast["upper_90"].to_numpy(dtype=np.float64)
+            )
+            diagnostics["test_coverage_90"] = int(np.count_nonzero(inside)) / len(
+                actual
+            )
+        frames.append(forecast)
         records.append(
             {
                 "fold": fold_id,
@@ -185,6 +239,7 @@ def evaluate_baseline(
                 .max()
                 .isoformat(),
                 "metrics": forecast_metrics(actual, predicted),
+                "diagnostics": diagnostics,
             }
         )
     predictions = pd.concat(frames, ignore_index=True)
@@ -212,28 +267,32 @@ def run_baseline(
     hypothesis: str | None = None,
 ) -> BaselineResult:
     """Load through the quality gate, evaluate and persist a predictive-only run."""
-    data = load_model_ready(dataset)
-    raw = pd.read_parquet(dataset / "raw.parquet")
-    availability: pd.Series[pd.Timestamp] | None = None
-    if "available_at" in raw:
-        raw["week"] = pd.to_datetime(raw["week"], format="ISO8601").dt.normalize()
-        raw["available_at"] = pd.to_datetime(raw["available_at"], format="ISO8601")
-        # One-to-one alignment; max arrival is conservative for repeated records.
-        by_week = raw.groupby("week")["available_at"].max()
-        availability = by_week.reindex(data["week"]).reset_index(drop=True)
+    data, availability = load_model_inputs(dataset)
     result = evaluate_baseline(data, config, availability)
     output.mkdir(parents=True, exist_ok=False)
     result.predictions.to_parquet(output / "predictions.parquet", index=False)
-    quality = json.loads((dataset / "quality.json").read_text())
     record = {
-        "model_family": "seasonal_naive",
+        "model_family": result.config.model,
         "model_status": "PREDICTIVE_ONLY",
+        "prediction_context": (
+            "forecast_from_origin"
+            if result.config.model in ("ets", "seasonal_naive")
+            else "conditional_on_realized_covariates"
+        ),
         "hypothesis": hypothesis
         or (
-            f"A {result.config.period}-week seasonal-naive forecast provides "
+            f"A {result.config.period}-week {result.config.model} benchmark provides "
             "a reference for more complex predictive models."
         ),
-        "change": "Repeat the last training season without observed future targets",
+        "change": (
+            "Fit raw-feature Ridge with inner temporal alpha selection"
+            if result.config.model == "ridge_raw"
+            else "Fit domain adstock/saturation predictive benchmark"
+            if result.config.model in ("ridge_domain", "hist_gradient_boosting")
+            else "Fit additive error/trend/seasonal ETS on each training prefix"
+            if result.config.model == "ets"
+            else "Repeat the last training season without observed future targets"
+        ),
         "validation": asdict(result.config),
         "folds": result.fold_records,
         "metrics": {"cv": result.cv_metrics, "holdout": result.holdout_metrics},
@@ -242,31 +301,33 @@ def run_baseline(
         "metric_units": {"mae": "AUD/week", "rmse": "AUD/week", "wape": "fraction"},
         "decision": "keep_as_baseline",
         "limitations": [
-            "Point forecasts only; no uncertainty intervals",
-            "Fixed seasonal period; does not learn trend, promotions or media effects",
+            (
+                "90% Gaussian innovation intervals exclude parameter uncertainty"
+                if result.config.model == "ets"
+                else "Point forecasts only; no uncertainty intervals"
+            ),
+            "Fixed seasonal period and untested stability under regime changes",
+            "Regressors condition on realized test covariates",
+            "Domain decay is fixed at 0.5, not estimated or read from privileged truth",
             "Cannot support attribution or budget allocation",
-            "No tuning or model-selection claims from this single baseline",
+            "Ridge alpha selected inside training only; no holdout selection",
         ],
         "feature_config": {
-            "inputs": ["training_revenue"],
-            "learned_preprocessing": None,
+            "inputs": (
+                ["training_revenue"]
+                if result.config.model in ("ets", "seasonal_naive")
+                else ["weekly_spend", "controls", "calendar"]
+            ),
+            "learned_preprocessing": (
+                "fold-fitted saturation references and StandardScaler for Ridge"
+                if result.config.model.startswith("ridge")
+                else "fold-fitted saturation references"
+                if result.config.model == "hist_gradient_boosting"
+                else None
+            ),
         },
-        "random_seed": None,
-        "dataset": {
-            "path": str(dataset.resolve()),
-            "hash": dataset_hash(data),
-            "clean_artifact_hash": sha256(
-                (dataset / "clean.parquet").read_bytes()
-            ).hexdigest(),
-            "raw_artifact_hash": sha256(
-                (dataset / "raw.parquet").read_bytes()
-            ).hexdigest(),
-            "quality_artifact_hash": sha256(
-                (dataset / "quality.json").read_bytes()
-            ).hexdigest(),
-            "quality_status": quality["status"],
-            "quality_issues": quality["issues"],
-        },
+        "random_seed": 42 if result.config.model == "hist_gradient_boosting" else None,
+        "dataset": dataset_evidence(dataset, data),
         "code_hash": source_code_hash(),
         "predictions_hash": sha256(
             (output / "predictions.parquet").read_bytes()

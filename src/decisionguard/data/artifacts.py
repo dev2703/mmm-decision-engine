@@ -1,5 +1,7 @@
 """Local immutable raw snapshots and auditable quality artifacts."""
 
+from __future__ import annotations
+
 import json
 from dataclasses import asdict
 from datetime import date, datetime
@@ -8,7 +10,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from decisionguard.data.integrity import IntegrityConfig, IntegrityResult, clean_dataset
+from decisionguard.data.integrity import (
+    IntegrityConfig,
+    IntegrityResult,
+    clean_dataset,
+    dataset_hash,
+)
 
 
 def json_date(value: object) -> str:
@@ -83,3 +90,34 @@ def load_model_ready(output: Path) -> pd.DataFrame:
         raise ValueError("modeling blocked by data-quality status")
     path = output / "clean.parquet"
     return pd.read_parquet(path)
+
+
+def load_model_inputs(directory: Path) -> tuple[pd.DataFrame, pd.Series[pd.Timestamp]]:
+    """Verified clean data and conservatively aligned raw arrival timestamps."""
+    data = load_model_ready(directory)
+    raw = pd.read_parquet(directory / "raw.parquet")
+    if "available_at" not in raw:
+        return data, data["week"] + pd.Timedelta(days=7)
+    raw["week"] = pd.to_datetime(raw["week"], format="ISO8601").dt.normalize()
+    raw["available_at"] = pd.to_datetime(raw["available_at"], format="ISO8601")
+    by_week = raw.groupby("week")["available_at"].max()
+    return data, by_week.reindex(data["week"]).reset_index(drop=True)
+
+
+def dataset_evidence(directory: Path, data: pd.DataFrame) -> dict[str, object]:
+    """Shared dataset provenance for predictive and probabilistic runs."""
+    quality = json.loads((directory / "quality.json").read_text())
+    return {
+        "path": str(directory.resolve()),
+        "hash": dataset_hash(data),
+        **{
+            f"{kind}_artifact_hash": sha256((directory / name).read_bytes()).hexdigest()
+            for kind, name in (
+                ("clean", "clean.parquet"),
+                ("raw", "raw.parquet"),
+                ("quality", "quality.json"),
+            )
+        },
+        "quality_status": quality["status"],
+        "quality_issues": quality["issues"],
+    }

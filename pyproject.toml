@@ -4,7 +4,22 @@ version = "0.1.0"
 description = "Evidence-gated marketing mix model decision support"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = ["numpy>=2,<2.4", "pandas>=2.2,<3", "pyarrow>=19,<25"]
+dependencies = [
+    "arviz>=0.21,<0.23",
+    "h5netcdf>=1.6,<2",
+    "h5py>=3.13,<4",
+    "numpy>=2,<2.4",
+    "nutpie>=0.15,<0.16",
+    "pandas>=2.2,<3",
+    "pyarrow>=19,<25",
+    "pymc>=5.23,<5.24",
+    "pymc-marketing>=0.14,<0.15",
+    "pytensor>=2.31,<2.32",
+    "scikit-learn>=1.7,<2",
+    "scipy>=1.15,<2",
+    "statsmodels>=0.14.6,<0.15",
+    "threadpoolctl>=3.6,<4",
+]
 
 [project.scripts]
 decisionguard = "decisionguard.cli:main"
@@ -18,6 +33,11 @@ packages = ["src/decisionguard"]
 
 [dependency-groups]
 dev = ["ruff>=0.11,<1", "pyright>=1.1.400,<2", "pytest>=8,<10", "pandas-stubs>=2.2,<3"]
+evaluation = [
+    "mmm-eval",
+    "tensorflow>=2.19,<2.20",
+    "tf-keras>=2.19,<2.20",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -35,3 +55,7 @@ venv = ".venv"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
+markers = ["scientific: real small Bayesian sampling and scientific integration checks"]
+
+[tool.uv.sources]
+mmm-eval = { git = "https://github.com/mutinex/mmm-eval.git", rev = "71d20009feaa30dd9606ffface62f16fb1134265" }

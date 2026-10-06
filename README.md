@@ -4,8 +4,9 @@ Marketing mix model decision support: evaluate whether model evidence justifies
 a budget recommendation, then propagate uncertainty into constrained decisions.
 
 Phases 1 (synthetic marketing world) and 2 (data integrity) are implemented.
-Phase 3 has started with temporal validation and a seasonal-naive baseline.
-The classical, linear, nonlinear, and Bayesian models remain subsequent work.
+Phase 3 predictive benchmarks and auditable temporal comparisons are implemented.
+Phase 4 Bayesian candidates and prior sensitivity are implemented.
+External evaluation, release gating and the decision/product phases follow.
 
 ## Local setup
 
@@ -177,6 +178,55 @@ advances forecasts across that gap. Insufficient history or missing weeks fail
 explicitly. Data-quality blockers and artifact changes are rejected before a run.
 
 The baseline is `PREDICTIVE_ONLY`: it supplies a forecast-error reference, without
-uncertainty intervals, attribution, ROI, or budget recommendations. Remaining
-Phase 3 work is the model ladder, fold-fitted preprocessing/feature engineering,
-and comparisons that explain the value of data quality and model complexity.
+uncertainty intervals, attribution, ROI, or budget recommendations. The full Phase 3 ladder adds classical and conditional regression comparisons
+with fold-fitted preprocessing, as described below.
+
+Classical ETS comparison (requires two annual training seasons):
+
+```sh
+uv run decisionguard baseline --dataset artifacts/demo --output artifacts/ets --model ets --initial-train 104
+uv run decisionguard baseline --dataset artifacts/demo --output artifacts/naive-104 --initial-train 104
+```
+
+Both runs use identical validation windows. ETS saves 90% prediction intervals,
+convergence and residual diagnostics; these remain predictive-only experiments.
+
+Complete predictive comparison:
+
+```sh
+LOKY_MAX_CPU_COUNT=1 OMP_NUM_THREADS=1 uv run decisionguard compare --dataset artifacts/demo --output artifacts/comparison
+```
+
+Inspect `comparison.json` and each model's `experiment.json` / `predictions.parquet`.
+Ridge and gradient boosting condition on test spend/controls; compare them within
+that group, separately from origin-only ETS/seasonal forecasts. CV selects models;
+holdout reports performance. No benchmark is authorized for budget optimization.
+
+
+Fit a real Bayesian candidate and a prior-sensitivity alternative:
+
+```sh
+# The cxx flag is the documented macOS linker workaround; omit on a working C toolchain.
+PYTENSOR_FLAGS=cxx= LOKY_MAX_CPU_COUNT=1 OMP_NUM_THREADS=1 uv run decisionguard train --dataset artifacts/demo --output artifacts/mmm
+PYTENSOR_FLAGS=cxx= LOKY_MAX_CPU_COUNT=1 OMP_NUM_THREADS=1 uv run decisionguard train --dataset artifacts/demo --output artifacts/mmm-prior --media-prior-mean 0.25 --media-prior-sigma 0.15
+```
+
+Defaults use four chains, 2,000 draws, 1,500 tuning steps, target acceptance 0.99,
+and depth 12. `model.json` records diagnostics and input/configuration provenance;
+`posterior.nc` preserves prior/posterior draws; `channel_draws.npz` preserves ROI,
+contributions and saturation-response draws; predictions contain 90% intervals.
+Candidates remain `CANDIDATE_UNEVALUATED` even when diagnostics pass. A short
+one-chain smoke run cannot meet the scientific diagnostic criteria.
+
+Record sensitivity without overwriting either fitted run:
+
+```python
+from pathlib import Path
+from decisionguard.models.artifacts import compare_prior_sensitivity
+
+compare_prior_sensitivity(
+    Path("artifacts/mmm"),
+    Path("artifacts/mmm-prior"),
+    Path("artifacts/prior-sensitivity"),
+)
+```

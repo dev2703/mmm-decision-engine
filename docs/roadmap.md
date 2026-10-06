@@ -286,11 +286,13 @@ A single command creates an auditable cleaned dataset.
 
 Phase 3 — Baselines and Experiment Framework
 
-Status: in progress. Seasonal-naive forecasts, chronological expanding-window CV,
-a final holdout, availability-aware gap checks, deterministic metrics, and auditable
-experiment records are implemented. ARIMA/ETS, raw/domain-engineered linear models,
-Histogram Gradient Boosting, fold-fitted preprocessing, and comparison experiments
-remain. This phase has not met its exit criteria yet.
+Status: implemented. Seasonal naive, additive seasonal ETS with intervals and
+residual diagnostics, raw/domain-feature Ridge, and Histogram Gradient Boosting
+share temporal validation and availability checks. Ridge scaling, saturation
+references and nested alpha selection fit only training prefixes. Auditable
+comparison runs separate origin-only forecasts from conditional predictions;
+see the technical spec for executed results, data-quality invariance, limitations,
+and the evidence for retaining simpler benchmarks. Bayesian modeling is next.
 
 Objective
 
@@ -386,6 +388,15 @@ feature engineering;
 model complexity.
 
 Phase 4 — Bayesian MMM
+
+Status: implemented. PyMC-Marketing candidates include train-fitted transforms,
+explicit priors/prior screening, original-unit posterior artifacts, predictive
+checks, R-hat/ESS/divergences/energy/depth diagnostics and prior sensitivity.
+Actual four-chain 2,000-draw default and wider-prior runs pass the diagnostic
+screen; short/failed exploratory runs remain inspectable and unreleased. Tests
+cover real small sampling, reload/observed-target integrity, directional control
+recovery, quality blockers and train-only preprocessing. External evaluation and
+release gating remain Phase 5; no candidate is authorized for optimization.
 
 Objective
 
