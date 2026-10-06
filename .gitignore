@@ -1,4 +1,4 @@
-# Keep research notes locally. Only the root README is intended for Git.
+# Keep research plans locally.
 *PLAN.md
 *plan.md
 
@@ -35,4 +35,13 @@ ENV/
 __pycache__/
 *.py[oc]
 ssh
-docs/
+
+# Keep local research private; publish only the canonical project contract.
+/docs/*
+!/docs/scope.md
+!/docs/prd.md
+!/docs/technical_spec.md
+!/docs/roadmap.md
+
+# Generated local dataset and experiment artifacts.
+/artifacts/
