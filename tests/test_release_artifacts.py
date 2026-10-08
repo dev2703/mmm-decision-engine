@@ -35,11 +35,13 @@ DIAGNOSTICS = {
 }
 
 
-def release_fixture(root: Path, *, placebo_passes: bool = True) -> tuple[Path, Path]:
+def release_fixture(
+    root: Path, *, placebo_passes: bool = True, channels: list[str] | None = None
+) -> tuple[Path, Path]:
     model, alternative, evaluation = (
         root / n for n in ("model", "alternative", "evaluation")
     )
-    channels = ["a", "b"]
+    channels = channels or ["a", "b"]
     for path in (model, alternative):
         path.mkdir()
         for name in ("posterior.nc", "channel_draws.npz", "predictions.parquet"):

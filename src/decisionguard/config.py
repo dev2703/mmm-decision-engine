@@ -9,6 +9,13 @@ from pathlib import Path
 from sqlalchemy.engine import make_url
 
 
+def artifact_path(root: Path, uri: str) -> Path:
+    path = (root / uri).resolve()
+    if Path(uri).is_absolute() or not path.is_relative_to(root.resolve()):
+        raise ValueError("artifact path escapes configured root")
+    return path
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str

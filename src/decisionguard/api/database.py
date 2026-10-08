@@ -100,3 +100,30 @@ class ModelRun(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EvaluationRun(Base):
+    __tablename__ = "evaluation_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED')"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    model_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("model_runs.id", ondelete="RESTRICT"), index=True
+    )
+    sensitivity_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("model_runs.id", ondelete="RESTRICT")
+    )
+    evaluator: Mapped[str]
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    artifact_uri: Mapped[str] = mapped_column(unique=True)
+    status: Mapped[str]
+    summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    record_hash: Mapped[str | None]
+    error_type: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

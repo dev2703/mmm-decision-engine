@@ -285,8 +285,9 @@ uv run uvicorn decisionguard.api.app:create_app --factory --host 127.0.0.1
 
 Open `/docs` for the typed API. Projects and generated datasets persist in
 PostgreSQL; their quality endpoint verifies immutable artifact checksums. The
-current slice supports project creation/retrieval, dataset generation and quality
-evidence. Further model/job/scenario endpoints are still being implemented.
+current API supports projects, generated datasets, quality evidence, experiments,
+model jobs, evaluation jobs and model health. Scenario/optimization endpoints
+remain to be implemented.
 This local single-user API does not yet provide authentication.
 
 Real PostgreSQL integration tests use an isolated schema per test and require a
@@ -312,6 +313,31 @@ Use `GET /model-runs/{id}` or `GET /projects/{id}/model-runs` to inspect lifecyc
 and evidence. A successful job remains an unevaluated candidate; job success is
 not scientific release. A crashed process may leave RUNNING metadata; current
 recovery is an explicit operator task, never automatic duplicate execution.
+
+Queue external evaluation through `POST /model-runs/{id}/evaluate`, supplying
+`{"sensitivity_run_id": "ALTERNATIVE_MODEL_UUID"}`. Both models must be completed,
+belong to the same project/dataset, and differ in media priors while preserving
+the training window and model specification. Optional `draws` and `tune` values
+are validated and saved with the request. Execute outside HTTP, with the same
+`DATABASE_URL` and `ARTIFACT_ROOT` as the API:
+
+```sh
+.venv-evaluation/bin/decisionguard evaluate --model-run-id MODEL_UUID
+```
+
+Use the evaluation environment documented above; the base environment omits the
+optional evaluator. Registered CLI execution rejects output, sensitivity, sampler
+and resume overrides. Inspect `GET /model-runs/{id}/health` for the latest job,
+diagnostics and verified policy. `SUCCEEDED` with `BLOCK` is a completed evaluation
+that forbids decisions. An absent, queued, running or failed evaluation has decision
+status `BLOCK` and no policy; it does not fall back to older release evidence.
+Changed model/evaluation artifacts return HTTP 409. No new model training or
+evaluation runs inside an HTTP request.
+
+Failed evaluations preserve artifacts but publish no policy. A new request receives
+a new output directory. A crashed worker can remain RUNNING and requires explicit
+operator reconciliation after confirming that it stopped; this registered job
+slice does not automatically resume or retry a possibly live worker.
 
 Default Bayesian runs discard warmup output using Nutpie's supported option.
 Use `--save-warmup` when investigating adaptation. Posterior draws, sampling

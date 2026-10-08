@@ -1755,6 +1755,63 @@ operation/status/duration logs without request bodies or credentials. PostgreSQL
 integration checks exercise snapshot isolation, duplicate claims, rollback/failure
 and a real one-chain training smoke whose diagnostics remain INCOMPLETE.
 
+### Phase 7 registered evaluation and model health
+
+Question: how can HTTP expose auditable external evaluation without owning expensive
+refits or treating a completed job as scientific approval? Extend the existing
+PostgreSQL/CLI pattern with one EvaluationRun table and migration. HTTP queues only
+completed, checksum-verified model pairs from the same project and dataset. Require
+the existing prior-sensitivity contract: same window/specification, changed media
+priors. Snapshot model-record hashes, evaluator commit and refit draws/tuning.
+Duplicate active requests serialize under the primary model's row lock.
+
+The CLI claims one QUEUED evaluation with `FOR UPDATE SKIP LOCKED`, closes the
+transaction, verifies registered models and dataset evidence, and calls the existing
+fold-safe evaluator using current registered artifact locations. Verify the completed
+manifest, raw source results, model/sensitivity identities, refit configuration and
+recomputed release policy before publishing summary/checksum in a short transaction.
+SUCCEEDED describes completed evidence, including BLOCK; it never promotes a
+CANDIDATE_UNEVALUATED training record by itself. Worker exceptions publish FAILED
+with an error type and no policy.
+
+Model health returns the latest requested evaluation. Without a successful verified
+evaluation, decision status is BLOCK and policy is absent. A newer pending/failed
+request cannot silently fall back to older passing evidence. Changed artifacts or
+stored metadata return HTTP 409. Check model/evaluation manifests against the trusted
+database's registered hashes as well as their component checksums. The completion
+reader recomputes existing policy instead of trusting labels. Reuse its returned
+model diagnostics so large posterior files are not hashed repeatedly in one health
+request. No mutable model cache, additional dependency or service/repository hierarchy
+was added; shared artifact containment moved to configuration to remove a worker's
+dependency on the HTTP application.
+
+Tradeoff: repeated verification still incurs file I/O proportional to posterior
+size. Prefer integrity to a cache without immutable-store guarantees. Revisit when
+profiling actual dashboard traffic or adopting versioned cloud storage. Registered
+jobs currently have explicit single-worker execution, not automatic retries/resume:
+process death can leave RUNNING, while database publication failure can leave complete
+unpublished artifacts. Operators must confirm the old worker stopped before recovery
+and verify evidence before reconciliation. A new request uses a new directory.
+
+Change review:
+
+- Summary: persisted external evaluation, CLI ownership and verified health contracts.
+- Blockers: none found for this local slice. Existing production scientific release
+  remains BLOCK; no evaluation thresholds or model methodology changed.
+- Major issues: none remaining in the selected scope. Authentication/shared storage
+  and automatic job supervision remain future deployment work.
+- Minor issues: existing Numba convolution fallback warnings remain visible.
+- What is good: actual PostgreSQL migration/transaction checks, immutable input
+  identity, explicit job/science separation and conservative latest-evaluation policy.
+- Simplification opportunities: removed redundant component-hash reads and reused
+  the evaluator, release policy and artifact loaders. No new dependencies.
+- Verification still required: none for this slice. Ruff formatting/lint and strict
+  Pyright passed; the full suite passed 238 tests with one optional-runtime skip and
+  two Numba warnings. The isolated evaluation profile passed 26 bridge/policy/
+  checkpoint checks. Evaluation job tests substitute the expensive external runner
+  with explicitly labeled unit fixtures while retaining real PostgreSQL, checksum
+  and release-policy behavior; no new production-scale evaluation is claimed.
+
 ### Phases 0–5 audit and strengthening
 
 The full upstream production evaluation completed all six tests and 20 actual

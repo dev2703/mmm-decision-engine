@@ -66,9 +66,11 @@ def main() -> None:
     evaluation = commands.add_parser(
         "evaluate", help="Run upstream MMM checks and release policy"
     )
-    evaluation.add_argument("--model-run", type=Path, required=True)
-    evaluation.add_argument("--sensitivity-run", type=Path, required=True)
-    evaluation.add_argument("--output", type=Path, required=True)
+    evaluation_source = evaluation.add_mutually_exclusive_group(required=True)
+    evaluation_source.add_argument("--model-run", type=Path)
+    evaluation_source.add_argument("--model-run-id", type=UUID)
+    evaluation.add_argument("--sensitivity-run", type=Path)
+    evaluation.add_argument("--output", type=Path)
     evaluation.add_argument("--draws", type=int)
     evaluation.add_argument("--tune", type=int)
     evaluation.add_argument("--resume", action="store_true")
@@ -128,16 +130,41 @@ def main() -> None:
             print(json.dumps(record["alternatives"]))
             return
         if args.command == "evaluate":
-            from decisionguard.evaluation.mmm_eval import evaluate_mmm
+            if args.model_run_id is not None:
+                from decisionguard.api.jobs import evaluate_model
+                from decisionguard.config import Settings
 
-            record = evaluate_mmm(
-                args.model_run,
-                args.sensitivity_run,
-                args.output,
-                draws=args.draws,
-                tune=args.tune,
-                resume=args.resume,
-            )
+                if (
+                    any(
+                        value is not None
+                        for value in (
+                            args.sensitivity_run,
+                            args.output,
+                            args.draws,
+                            args.tune,
+                        )
+                    )
+                    or args.resume
+                ):
+                    raise ValueError(
+                        "registered evaluation uses its stored configuration"
+                    )
+                record = evaluate_model(args.model_run_id, Settings.from_environment())
+            else:
+                if args.sensitivity_run is None or args.output is None:
+                    raise ValueError(
+                        "Path evaluation requires --sensitivity-run and --output"
+                    )
+                from decisionguard.evaluation.mmm_eval import evaluate_mmm
+
+                record = evaluate_mmm(
+                    args.model_run,
+                    args.sensitivity_run,
+                    args.output,
+                    draws=args.draws,
+                    tune=args.tune,
+                    resume=args.resume,
+                )
             print(json.dumps(record["policy"]))
             return
         if args.command == "train":

@@ -6,9 +6,8 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import date, datetime
-from pathlib import Path
 from time import perf_counter
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -17,8 +16,14 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from starlette.responses import Response
 
-from decisionguard.api.database import Dataset, Experiment, ModelRun, Project
-from decisionguard.config import Settings
+from decisionguard.api.database import (
+    Dataset,
+    EvaluationRun,
+    Experiment,
+    ModelRun,
+    Project,
+)
+from decisionguard.config import Settings, artifact_path
 
 
 class ProjectCreate(BaseModel):
@@ -95,11 +100,35 @@ class ModelRunView(BaseModel):
     finished_at: datetime | None
 
 
-def artifact_path(root: Path, uri: str) -> Path:
-    path = (root / uri).resolve()
-    if Path(uri).is_absolute() or not path.is_relative_to(root.resolve()):
-        raise ValueError("artifact path escapes configured root")
-    return path
+class EvaluationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sensitivity_run_id: UUID
+    draws: int | None = Field(default=None, strict=True, ge=1, le=10000)
+    tune: int | None = Field(default=None, strict=True, ge=1, le=20000)
+
+
+class EvaluationRunView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    model_run_id: UUID
+    sensitivity_run_id: UUID
+    evaluator: str
+    configuration: dict[str, Any]
+    status: Literal["QUEUED", "RUNNING", "SUCCEEDED", "FAILED"]
+    summary: dict[str, Any] | None
+    error_type: str | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class ModelHealthView(BaseModel):
+    model_run_id: UUID
+    model_status: str
+    decision_status: Literal["PASS", "WARN", "RESTRICT", "BLOCK"]
+    diagnostics: dict[str, Any] | None
+    policy: dict[str, Any] | None
+    evaluation: EvaluationRunView | None
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -343,5 +372,116 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 .order_by(ModelRun.created_at.desc())
             )
             return [ModelRunView.model_validate(run) for run in runs]
+
+    @app.post(
+        "/model-runs/{model_run_id}/evaluate",
+        response_model=EvaluationRunView,
+        status_code=202,
+    )
+    def queue_evaluation(
+        model_run_id: UUID, body: EvaluationCreate
+    ) -> EvaluationRunView:
+        from decisionguard.api.evaluations import load_registered_model
+        from decisionguard.evaluation.artifacts import UPSTREAM_COMMIT
+        from decisionguard.models.artifacts import validate_prior_sources
+
+        with sessions.begin() as session:
+            run = session.get(ModelRun, model_run_id, with_for_update=True)
+            if run is None:
+                raise HTTPException(404, "Model run not found")
+            alternative = session.get(ModelRun, body.sensitivity_run_id)
+            if alternative is None:
+                raise HTTPException(404, "Sensitivity model run not found")
+            parent = session.get(Experiment, run.experiment_id)
+            other = session.get(Experiment, alternative.experiment_id)
+            if (
+                parent is None
+                or other is None
+                or parent.project_id != other.project_id
+                or run.dataset_id != alternative.dataset_id
+            ):
+                raise HTTPException(409, "Sensitivity must use this project's dataset")
+            try:
+                model = load_registered_model(run, root)
+                sensitivity = load_registered_model(alternative, root)
+                validate_prior_sources(model, sensitivity)
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                raise HTTPException(
+                    409, "Completed compatible model evidence required"
+                ) from error
+            active = session.scalar(
+                select(EvaluationRun.id).where(
+                    EvaluationRun.model_run_id == model_run_id,
+                    EvaluationRun.status.in_(["QUEUED", "RUNNING"]),
+                )
+            )
+            if active is not None:
+                raise HTTPException(409, "Model already has an active evaluation")
+            identifier = uuid4()
+            evaluation = EvaluationRun(
+                id=identifier,
+                model_run_id=model_run_id,
+                sensitivity_run_id=alternative.id,
+                evaluator="mmm-eval",
+                configuration={
+                    "commit": UPSTREAM_COMMIT,
+                    "draws": body.draws or model["config"]["draws"],
+                    "tune": body.tune or model["config"]["tune"],
+                    "model_record_hash": run.record_hash,
+                    "sensitivity_record_hash": alternative.record_hash,
+                },
+                artifact_uri=f"projects/{parent.project_id}/evaluations/{identifier}",
+                status="QUEUED",
+            )
+            session.add(evaluation)
+            session.flush()
+            return EvaluationRunView.model_validate(evaluation)
+
+    @app.get("/model-runs/{model_run_id}/health", response_model=ModelHealthView)
+    def model_health(model_run_id: UUID) -> dict[str, Any]:
+        from decisionguard.api.evaluations import (
+            load_registered_model,
+            verified_evaluation,
+        )
+
+        with sessions() as session:
+            run = session.get(ModelRun, model_run_id)
+            if run is None:
+                raise HTTPException(404, "Model run not found")
+            evaluation = session.scalar(
+                select(EvaluationRun)
+                .where(EvaluationRun.model_run_id == model_run_id)
+                .order_by(EvaluationRun.created_at.desc(), EvaluationRun.id.desc())
+                .limit(1)
+            )
+            diagnostics: dict[str, Any] | None = None
+            policy: dict[str, Any] | None = None
+            try:
+                if evaluation is not None and evaluation.status == "SUCCEEDED":
+                    alternative = session.get(ModelRun, evaluation.sensitivity_run_id)
+                    if alternative is None:
+                        raise ValueError("sensitivity model missing")
+                    policy, model = verified_evaluation(
+                        evaluation, run, alternative, root
+                    )
+                    diagnostics = model["diagnostics"]
+                elif run.status == "SUCCEEDED":
+                    diagnostics = load_registered_model(run, root)["diagnostics"]
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                raise HTTPException(
+                    409, "Model health artifact integrity check failed"
+                ) from error
+            return {
+                "model_run_id": str(run.id),
+                "model_status": run.model_status,
+                "decision_status": policy["state"] if policy else "BLOCK",
+                "diagnostics": diagnostics,
+                "policy": policy,
+                "evaluation": (
+                    EvaluationRunView.model_validate(evaluation).model_dump(mode="json")
+                    if evaluation is not None
+                    else None
+                ),
+            }
 
     return app

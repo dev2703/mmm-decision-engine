@@ -7,9 +7,9 @@ from uuid import UUID
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from decisionguard.api.app import artifact_path
-from decisionguard.api.database import Dataset, ModelRun
-from decisionguard.config import Settings
+from decisionguard.api.database import Dataset, EvaluationRun, ModelRun
+from decisionguard.api.evaluations import load_registered_model, verified_evaluation
+from decisionguard.config import Settings, artifact_path
 from decisionguard.data.artifacts import file_hash, load_model_ready, load_quality
 from decisionguard.data.integrity import dataset_hash
 from decisionguard.models.artifacts import load_mmm_record
@@ -77,6 +77,86 @@ def train_experiment(experiment_id: UUID, settings: Settings) -> dict[str, Any]:
                     run.status = "FAILED"
                     run.error_type = type(error).__name__
                     run.finished_at = datetime.now(UTC)
+        raise
+    finally:
+        engine.dispose()
+
+
+def evaluate_model(model_run_id: UUID, settings: Settings) -> dict[str, Any]:
+    """Claim one registered evaluation; BLOCK is a successful scientific result."""
+    engine = create_engine(settings.database_url, pool_pre_ping=True)
+    evaluation_id: UUID | None = None
+    try:
+        with Session(engine, expire_on_commit=False) as session, session.begin():
+            evaluation = session.scalar(
+                select(EvaluationRun)
+                .where(
+                    EvaluationRun.model_run_id == model_run_id,
+                    EvaluationRun.status == "QUEUED",
+                )
+                .order_by(EvaluationRun.created_at)
+                .with_for_update(skip_locked=True)
+                .limit(1)
+            )
+            if evaluation is None:
+                raise ValueError("no queued evaluation available for this model")
+            model = session.get(ModelRun, evaluation.model_run_id)
+            alternative = session.get(ModelRun, evaluation.sensitivity_run_id)
+            dataset = session.get(Dataset, model.dataset_id) if model else None
+            if model is None or alternative is None or dataset is None:
+                raise ValueError("registered evaluation inputs missing")
+            evaluation_id = evaluation.id
+            dataset_path = artifact_path(settings.artifact_root, dataset.artifact_uri)
+            expected_hash, expected_quality = dataset.hash, dict(dataset.quality)
+            evaluation.status = "RUNNING"
+            evaluation.started_at = datetime.now(UTC)
+        # Detached snapshots: no database transaction is held during external fits.
+        primary = load_registered_model(model, settings.artifact_root)
+        load_registered_model(alternative, settings.artifact_root)
+        config = evaluation.configuration
+        from decisionguard.evaluation.artifacts import UPSTREAM_COMMIT
+
+        if (
+            config["commit"] != UPSTREAM_COMMIT
+            or model.record_hash != config["model_record_hash"]
+            or alternative.record_hash != config["sensitivity_record_hash"]
+            or primary["dataset"]["hash"] != expected_hash
+            or load_quality(dataset_path) != expected_quality
+            or dataset_hash(load_model_ready(dataset_path)) != expected_hash
+        ):
+            raise ValueError("registered evaluation inputs changed")
+        from decisionguard.evaluation.mmm_eval import evaluate_mmm
+
+        output = artifact_path(settings.artifact_root, evaluation.artifact_uri)
+        result = evaluate_mmm(
+            artifact_path(settings.artifact_root, model.artifact_uri),
+            artifact_path(settings.artifact_root, alternative.artifact_uri),
+            output,
+            draws=config["draws"],
+            tune=config["tune"],
+            dataset=dataset_path,
+        )
+        summary, _ = verified_evaluation(
+            evaluation, model, alternative, settings.artifact_root
+        )
+        record_hash = file_hash(output / "evaluation.json")
+        with Session(engine) as session, session.begin():
+            stored = session.get(EvaluationRun, evaluation_id, with_for_update=True)
+            if stored is None or stored.status != "RUNNING":
+                raise ValueError("evaluation no longer belongs to this worker")
+            stored.status = "SUCCEEDED"
+            stored.summary = summary
+            stored.record_hash = record_hash
+            stored.finished_at = datetime.now(UTC)
+        return result
+    except Exception as error:
+        if evaluation_id is not None:
+            with Session(engine) as session, session.begin():
+                stored = session.get(EvaluationRun, evaluation_id, with_for_update=True)
+                if stored is not None and stored.status == "RUNNING":
+                    stored.status = "FAILED"
+                    stored.error_type = type(error).__name__
+                    stored.finished_at = datetime.now(UTC)
         raise
     finally:
         engine.dispose()
