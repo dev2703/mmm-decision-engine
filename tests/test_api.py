@@ -22,7 +22,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from decisionguard.api.app import artifact_path, create_app
-from decisionguard.api.database import Dataset, EvaluationRun, ModelRun, Project
+from decisionguard.api.database import (
+    Dataset,
+    EvaluationRun,
+    ModelRun,
+    Project,
+    Scenario,
+)
 from decisionguard.config import Settings
 from decisionguard.data.artifacts import (
     dataset_evidence,
@@ -62,9 +68,13 @@ def database(tmp_path: Path) -> Iterator[Settings]:
 
 def test_migrations_round_trip_on_postgresql(database: Settings) -> None:
     engine = create_engine(database.database_url)
-    assert {"projects", "datasets", "evaluation_runs", "alembic_version"} <= set(
-        inspect(engine).get_table_names()
-    )
+    assert {
+        "projects",
+        "datasets",
+        "evaluation_runs",
+        "scenarios",
+        "alembic_version",
+    } <= set(inspect(engine).get_table_names())
     configuration = Config("alembic.ini")
     configuration.attributes["database_url"] = database.database_url
     command.downgrade(configuration, "base")
@@ -509,6 +519,204 @@ def test_registered_health_rejects_changed_evidence(
             assert client.get(f"/model-runs/{model_id}/health").status_code == 409
         finally:
             engine.dispose()
+
+
+def test_budget_scenario_persists_constraints_and_evidence(
+    database: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from decisionguard.api.jobs import evaluate_model
+
+    with TestClient(create_app(database)) as client:
+        model_id, alternative_id, template = registered_evaluation_models(
+            client, database
+        )
+        client.post(
+            f"/model-runs/{model_id}/evaluate",
+            json={"sensitivity_run_id": str(alternative_id)},
+        )
+        stub_evaluator(monkeypatch, template)
+        evaluate_model(model_id, database)
+        body = {
+            "total": 200,
+            "current": {"search_spend": 100, "meta_spend": 100},
+            "floors": {"meta_spend": 80},
+            "caps": {"search_spend": 150, "meta_spend": 130},
+            "max_movement": {"search_spend": 0.1, "meta_spend": 0.2},
+            "protected_spend": {"meta_spend": 95},
+            "horizon_weeks": 26,
+            "risk_policy": "expected",
+        }
+        response = client.post(f"/model-runs/{model_id}/scenarios", json=body)
+        assert response.status_code == 201, response.text
+        scenario = response.json()
+        assert scenario["budget"] == 200
+        assert scenario["constraints"] == {
+            key: value
+            for key, value in body.items()
+            if key not in {"horizon_weeks", "risk_policy"}
+        }
+        assert scenario["effective_bounds"]["search_spend"] == pytest.approx([90, 110])
+        assert scenario["effective_bounds"]["meta_spend"] == pytest.approx([95, 120])
+        assert scenario["release"]["state"] == "WARN"
+        assert len(scenario["evaluation_record_hash"]) == 64
+        assert len(scenario["code_version"]) == 64
+    with TestClient(create_app(database)) as restarted:
+        assert restarted.get(f"/scenarios/{scenario['id']}").json() == scenario
+        # Creation evidence remains inspectable when a newer evaluation is pending.
+        restarted.post(
+            f"/model-runs/{model_id}/evaluate",
+            json={"sensitivity_run_id": str(alternative_id)},
+        )
+        assert (
+            restarted.post(f"/model-runs/{model_id}/scenarios", json=body).status_code
+            == 409
+        )
+        assert restarted.get(f"/scenarios/{scenario['id']}").json() == scenario
+
+
+def test_scenarios_reject_blocked_and_changed_evidence(
+    database: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from decisionguard.api.jobs import evaluate_model
+
+    with TestClient(create_app(database)) as client:
+        model_id, alternative_id, template = registered_evaluation_models(
+            client, database, placebo_passes=False
+        )
+        body = {"total": 200, "current": {"search_spend": 100, "meta_spend": 100}}
+        assert (
+            client.post(f"/model-runs/{model_id}/scenarios", json=body).status_code
+            == 409
+        )
+        client.post(
+            f"/model-runs/{model_id}/evaluate",
+            json={"sensitivity_run_id": str(alternative_id)},
+        )
+        stub_evaluator(monkeypatch, template)
+        evaluate_model(model_id, database)
+        blocked = client.post(f"/model-runs/{model_id}/scenarios", json=body)
+        assert blocked.status_code == 409 and "BLOCK" in blocked.text
+        (database.artifact_root / "model" / "model.json").write_text("{}")
+        changed = client.post(f"/model-runs/{model_id}/scenarios", json=body)
+        assert changed.status_code == 409 and "integrity" in changed.text
+        engine = create_engine(database.database_url)
+        try:
+            with Session(engine) as session:
+                assert session.scalar(select(Scenario.id)) is None
+        finally:
+            engine.dispose()
+
+
+def test_scenario_contract_rejects_invalid_and_infeasible_requests(
+    database: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from decisionguard.api.jobs import evaluate_model
+
+    with TestClient(create_app(database)) as client:
+        model_id, alternative_id, template = registered_evaluation_models(
+            client, database
+        )
+        client.post(
+            f"/model-runs/{model_id}/evaluate",
+            json={"sensitivity_run_id": str(alternative_id)},
+        )
+        stub_evaluator(monkeypatch, template)
+        evaluate_model(model_id, database)
+        body = {"total": 200, "current": {"search_spend": 100, "meta_spend": 100}}
+        for invalid in (
+            {"total": 0},
+            {"total": True},
+            {"total": "200"},
+            {"current": {"search_spend": "100", "meta_spend": 100}},
+            {"caps": {"search_spend": -1}},
+            {"current": {"search_spend": True, "meta_spend": 100}},
+            {"current": {"search_spend": 100}},
+            {"caps": {"unknown": 100}},
+            {"floors": {"search_spend": 201}},
+            {"caps": {"search_spend": 10, "meta_spend": 10}},
+            {"protected_spend": {"meta_spend": 110}, "caps": {"meta_spend": 100}},
+            {"max_movement": {"meta_spend": -0.1}},
+            {"horizon_weeks": 53},
+            {"horizon_weeks": True},
+            {"risk_policy": "unlimited"},
+            {"execute": "shell"},
+        ):
+            response = client.post(
+                f"/model-runs/{model_id}/scenarios", json=body | invalid
+            )
+            assert response.status_code == 422, response.text
+        assert (
+            client.post(f"/model-runs/{uuid4()}/scenarios", json=body).status_code
+            == 404
+        )
+        assert client.get(f"/scenarios/{uuid4()}").status_code == 404
+        # Valid JSON can still overflow the native floating-point representation.
+        response = client.post(
+            f"/model-runs/{model_id}/scenarios",
+            content='{"total":1e400,"current":{"search_spend":100,"meta_spend":100}}',
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"][0]["type"] == "finite_number"
+        assert "input" not in response.json()["detail"][0]
+
+
+def test_scenario_bounds_include_verified_channel_restrictions(
+    database: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pandas as pd
+
+    from decisionguard.api.jobs import evaluate_model
+    from decisionguard.evaluation.artifacts import source_evidence
+    from decisionguard.evaluation.policy import assess_release
+
+    with TestClient(create_app(database)) as client:
+        model_id, alternative_id, template = registered_evaluation_models(
+            client, database
+        )
+        raw_path = template / "mmm_eval_raw.parquet"
+        raw = pd.read_parquet(raw_path)
+        selected = (raw["test_name"] == "perturbation") & raw[
+            "specific_metric_name"
+        ].str.endswith("_search_spend")
+        raw.loc[selected, "metric_pass"] = False
+        raw.loc[selected, "metric_value"] = 10.0
+        raw.to_parquet(raw_path, index=False)
+        model = json.loads(
+            (database.artifact_root / "model" / "model.json").read_text()
+        )
+        record = json.loads((template / "evaluation.json").read_text())
+        record["raw_artifact_hash"] = file_hash(raw_path)
+        record["policy"] = asdict(
+            assess_release(
+                source_evidence(raw, model["config"]["channels"]),
+                model["diagnostics"],
+                model["dataset"]["quality_status"],
+                model["config"]["channels"],
+                prior_sensitivity=dict.fromkeys(model["config"]["channels"], 0.0),
+            )
+        )
+        write_json(template / "evaluation.json", record)
+        client.post(
+            f"/model-runs/{model_id}/evaluate",
+            json={"sensitivity_run_id": str(alternative_id)},
+        )
+        stub_evaluator(monkeypatch, template)
+        evaluate_model(model_id, database)
+        body = {
+            "total": 200,
+            "current": {"search_spend": 100, "meta_spend": 100},
+            "max_movement": {"search_spend": 0.5},
+        }
+        response = client.post(f"/model-runs/{model_id}/scenarios", json=body)
+        assert response.status_code == 201, response.text
+        assert response.json()["release"]["state"] == "RESTRICT"
+        assert response.json()["effective_bounds"]["search_spend"] == [95, 105]
+        infeasible = client.post(
+            f"/model-runs/{model_id}/scenarios",
+            json=body | {"floors": {"search_spend": 110}},
+        )
+        assert infeasible.status_code == 422
 
 
 def test_registered_evaluation_failure_and_exclusive_worker(

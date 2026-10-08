@@ -659,7 +659,10 @@ Registered evaluation jobs now have PostgreSQL persistence, transactional CLI
 claims and verified model-health responses. Evaluation job success is separate
 from scientific PASS/WARN/RESTRICT/BLOCK; changed evidence is rejected, and newer
 queued/failed evaluations cannot silently reuse an older passing result.
-Scenario/optimization persistence and their API contracts remain next.
+Budget scenarios now persist validated constraints, effective channel bounds,
+planning horizon, risk preference and verified evaluation identity. Creation
+rejects blocked/pending/changed evidence and infeasible constraints; historical
+snapshots remain retrievable. Optimization persistence/execution APIs remain next.
 
 Objective
 

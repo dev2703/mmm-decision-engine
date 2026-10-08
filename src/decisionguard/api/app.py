@@ -11,10 +11,11 @@ from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from decisionguard.api.database import (
     Dataset,
@@ -22,6 +23,7 @@ from decisionguard.api.database import (
     Experiment,
     ModelRun,
     Project,
+    Scenario,
 )
 from decisionguard.config import Settings, artifact_path
 
@@ -131,6 +133,37 @@ class ModelHealthView(BaseModel):
     evaluation: EvaluationRunView | None
 
 
+Money = Annotated[float, Field(strict=True, ge=0, allow_inf_nan=False)]
+
+
+class ScenarioCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    total: Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]
+    current: dict[str, Money]
+    floors: dict[str, Money] = Field(default_factory=dict)
+    caps: dict[str, Money] = Field(default_factory=dict)
+    max_movement: dict[str, Money] = Field(default_factory=dict)
+    protected_spend: dict[str, Money] = Field(default_factory=dict)
+    horizon_weeks: int = Field(default=13, strict=True, ge=1, le=52)
+    risk_policy: Literal["expected", "conservative"] = "conservative"
+
+
+class ScenarioView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    model_run_id: UUID
+    evaluation_run_id: UUID
+    evaluation_record_hash: str
+    budget: float
+    constraints: dict[str, Any]
+    effective_bounds: dict[str, Any]
+    release: dict[str, Any]
+    horizon_weeks: int
+    risk_policy: Literal["expected", "conservative"]
+    code_version: str
+    created_at: datetime
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_environment()
     engine = create_engine(settings.database_url, pool_pre_ping=True)
@@ -143,6 +176,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine.dispose()
 
     app = FastAPI(title="mmm-decision-engine", lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(
+        _: Request, error: RequestValidationError
+    ) -> JSONResponse:
+        # Do not reflect untrusted inputs, including non-JSON finite-number failures.
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {key: item[key] for key in ("type", "loc", "msg")}
+                    for item in error.errors()
+                ]
+            },
+        )
 
     @app.middleware("http")
     async def correlation(request: Request, call_next: Any) -> Response:
@@ -440,6 +488,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/model-runs/{model_run_id}/health", response_model=ModelHealthView)
     def model_health(model_run_id: UUID) -> dict[str, Any]:
         from decisionguard.api.evaluations import (
+            latest_evaluation,
             load_registered_model,
             verified_evaluation,
         )
@@ -448,12 +497,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             run = session.get(ModelRun, model_run_id)
             if run is None:
                 raise HTTPException(404, "Model run not found")
-            evaluation = session.scalar(
-                select(EvaluationRun)
-                .where(EvaluationRun.model_run_id == model_run_id)
-                .order_by(EvaluationRun.created_at.desc(), EvaluationRun.id.desc())
-                .limit(1)
-            )
+            evaluation = latest_evaluation(session, model_run_id)
             diagnostics: dict[str, Any] | None = None
             policy: dict[str, Any] | None = None
             try:
@@ -483,5 +527,75 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     else None
                 ),
             }
+
+    @app.post(
+        "/model-runs/{model_run_id}/scenarios",
+        response_model=ScenarioView,
+        status_code=201,
+    )
+    def create_scenario(model_run_id: UUID, body: ScenarioCreate) -> ScenarioView:
+        from decisionguard.api.evaluations import latest_evaluation, verified_evaluation
+        from decisionguard.data.artifacts import source_code_hash
+        from decisionguard.evaluation.policy import ReleaseDecision, ReleaseState
+        from decisionguard.optimization.allocation import BudgetConstraints
+
+        with sessions.begin() as session:
+            # Serialize with evaluation requests so creation binds the latest request.
+            run = session.get(ModelRun, model_run_id, with_for_update=True)
+            if run is None:
+                raise HTTPException(404, "Model run not found")
+            evaluation = latest_evaluation(session, model_run_id)
+            if (
+                evaluation is None
+                or evaluation.status != "SUCCEEDED"
+                or evaluation.record_hash is None
+            ):
+                raise HTTPException(409, "Latest evaluation must be completed")
+            alternative = session.get(ModelRun, evaluation.sensitivity_run_id)
+            if alternative is None:
+                raise HTTPException(409, "Sensitivity model missing")
+            try:
+                summary, model = verified_evaluation(evaluation, run, alternative, root)
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                raise HTTPException(
+                    409, "Scenario evidence integrity check failed"
+                ) from error
+            release = TypeAdapter(ReleaseDecision).validate_python(summary)
+            if release.state == ReleaseState.BLOCK:
+                raise HTTPException(409, "BLOCK model cannot create a budget scenario")
+            quantities = body.model_dump(exclude={"horizon_weeks", "risk_policy"})
+            constraints = BudgetConstraints(**quantities)
+            channels = tuple(model["config"]["channels"])
+            try:
+                lower, upper = constraints.bounds(channels, release)
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from error
+            scenario = Scenario(
+                model_run_id=model_run_id,
+                evaluation_run_id=evaluation.id,
+                evaluation_record_hash=evaluation.record_hash,
+                budget=body.total,
+                constraints=quantities,
+                effective_bounds={
+                    channel: [float(lower[index]), float(upper[index])]
+                    for index, channel in enumerate(channels)
+                },
+                release=summary,
+                horizon_weeks=body.horizon_weeks,
+                risk_policy=body.risk_policy,
+                code_version=source_code_hash(),
+            )
+            session.add(scenario)
+            session.flush()
+            return ScenarioView.model_validate(scenario)
+
+    @app.get("/scenarios/{scenario_id}", response_model=ScenarioView)
+    def get_scenario(scenario_id: UUID) -> ScenarioView:
+        """Historical evidence snapshot; no current optimization authority."""
+        with sessions() as session:
+            scenario = session.get(Scenario, scenario_id)
+            if scenario is None:
+                raise HTTPException(404, "Scenario not found")
+            return ScenarioView.model_validate(scenario)
 
     return app

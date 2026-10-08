@@ -4,12 +4,26 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from decisionguard.api.database import EvaluationRun, ModelRun
 from decisionguard.config import artifact_path
 from decisionguard.data.artifacts import file_hash
 from decisionguard.evaluation.artifacts import load_release
 from decisionguard.models.artifacts import load_mmm_record
+
+
+def latest_evaluation(session: Session, model_run_id: UUID) -> EvaluationRun | None:
+    """Latest request governs decisions, including pending/failed requests."""
+    return session.scalar(
+        select(EvaluationRun)
+        .where(EvaluationRun.model_run_id == model_run_id)
+        .order_by(EvaluationRun.created_at.desc(), EvaluationRun.id.desc())
+        .limit(1)
+    )
 
 
 def registered_model_path(run: ModelRun, root: Path) -> Path:

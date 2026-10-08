@@ -127,3 +127,31 @@ class EvaluationRun(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Scenario(Base):
+    __tablename__ = "scenarios"
+    __table_args__ = (
+        CheckConstraint("budget > 0"),
+        CheckConstraint("horizon_weeks BETWEEN 1 AND 52"),
+        CheckConstraint("risk_policy IN ('expected', 'conservative')"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    model_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("model_runs.id", ondelete="RESTRICT"), index=True
+    )
+    evaluation_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="RESTRICT")
+    )
+    evaluation_record_hash: Mapped[str]
+    budget: Mapped[float]
+    constraints: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    effective_bounds: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    release: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    horizon_weeks: Mapped[int]
+    risk_policy: Mapped[str]
+    code_version: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

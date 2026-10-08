@@ -1812,6 +1812,62 @@ Change review:
   with explicitly labeled unit fixtures while retaining real PostgreSQL, checksum
   and release-policy behavior; no new production-scale evaluation is claimed.
 
+### Phase 7 persisted budget scenarios
+
+Question: how should budget requests remain auditable without allowing saved
+release labels to authorize later decisions? Store one immutable Scenario row
+with model/evaluation IDs, evaluation-record hash, weekly AUD budget, complete
+constraints, effective channel bounds, release snapshot, horizon, risk preference
+and validation code hash. Keep this small relational/JSONB record in PostgreSQL;
+no posterior or optimization arrays are needed for request validation.
+
+POST creation locks the model row, sharing serialization with evaluation requests.
+A shared latest-evaluation query deliberately includes pending and failed requests.
+Require successful, checksum-verified and recomputed evidence, then reject BLOCK.
+Pydantic validates primitive numbers, horizon and risk labels; its dataclass adapter
+restores the existing ReleaseDecision type. Reuse BudgetConstraints.bounds for
+channel coverage, floors/caps/protected spend, movement restrictions and simplex
+feasibility. Never replace a 5% source restriction with a caller's larger bound.
+Current allocation need not sum to the requested total: budget changes are valid
+scenarios, subject to feasibility. All amounts denote constant weekly spend.
+
+GET returns the creation snapshot for inspection after restart or policy changes.
+It is historical evidence, not present optimization authority. The next registered
+optimizer must verify both stored scenario identity and current model/evaluation
+policy. This slice records `expected`/`conservative` preference and does not solve
+allocations or produce outcome claims. Registered optimization is separate work.
+
+Observed regression: valid JSON `1e400` becomes native infinity. Pydantic correctly
+rejects it, but the installed FastAPI handler reflects that value into a JSONResponse,
+which raises an out-of-range serialization error instead of returning 422. Return
+only validation type, location and message, omitting input/context across request
+errors. This also avoids reflecting untrusted input. Retain regression coverage.
+
+Tradeoffs: conservative creation rejects BLOCK rather than storing an apparently
+usable request; users can still inspect model health and historical scenarios.
+Revisit draft scenarios if the product requires saving incomplete requests, with
+explicit draft semantics. Use the existing solver's deterministic feasibility
+contract rather than duplicate arithmetic or load Bayesian models inside HTTP.
+No dependency, service layer, generic queue or storage interface was introduced.
+
+Change review:
+
+- Summary: persisted, feasible budget scenarios bound to verified release evidence.
+- Blockers: none found for this local slice; the production model remains BLOCK.
+- Major issues: none remaining in scope. Registered optimization must revalidate
+  current evidence before using a historical scenario.
+- Minor issues: none identified requiring changes in this slice.
+- What is good: PostgreSQL migration/schema round trip, restart persistence,
+  fail-closed policy, constrained channel movement and finite-number validation.
+- Simplification opportunities: reused existing budget bounds and release readers;
+  consolidated latest-evaluation selection between health and scenario creation.
+- Verification still required: none for this slice. Ruff formatting/lint, strict
+  Pyright and diff whitespace checks passed. The full suite passed 242 tests with
+  one optional-runtime skip; the evaluation profile passed 26 checks. Actual small
+  Bayesian scientific tests ran; no new production evaluation is claimed. OpenAPI
+  includes both scenario routes and fresh API construction excludes PyMC, sklearn,
+  TensorFlow and mmm-eval imports.
+
 ### Phases 0–5 audit and strengthening
 
 The full upstream production evaluation completed all six tests and 20 actual

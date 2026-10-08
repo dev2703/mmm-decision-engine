@@ -286,8 +286,8 @@ uv run uvicorn decisionguard.api.app:create_app --factory --host 127.0.0.1
 Open `/docs` for the typed API. Projects and generated datasets persist in
 PostgreSQL; their quality endpoint verifies immutable artifact checksums. The
 current API supports projects, generated datasets, quality evidence, experiments,
-model jobs, evaluation jobs and model health. Scenario/optimization endpoints
-remain to be implemented.
+model jobs, evaluation jobs, model health and validated budget scenarios.
+Registered optimization endpoints remain to be implemented.
 This local single-user API does not yet provide authentication.
 
 Real PostgreSQL integration tests use an isolated schema per test and require a
@@ -338,6 +338,42 @@ Failed evaluations preserve artifacts but publish no policy. A new request recei
 a new output directory. A crashed worker can remain RUNNING and requires explicit
 operator reconciliation after confirming that it stopped; this registered job
 slice does not automatically resume or retry a possibly live worker.
+
+Create a budget scenario with `POST /model-runs/{id}/scenarios`. For a model using
+all five channels, an example request is:
+
+```json
+{
+  "total": 100000,
+  "current": {
+    "search_spend": 20000,
+    "meta_spend": 20000,
+    "tv_spend": 30000,
+    "ooh_spend": 10000,
+    "youtube_spend": 20000
+  },
+  "max_movement": {"meta_spend": 0.1},
+  "protected_spend": {"tv_spend": 25000},
+  "horizon_weeks": 13,
+  "risk_policy": "conservative"
+}
+```
+
+Amounts are constant weekly AUD budgets, not totals across the planning horizon.
+Current allocation must include exactly the fitted channels; the requested total
+may differ from their current sum. Optional `floors`, `caps`, `max_movement` and
+`protected_spend` maps are intersected with verified channel restrictions. Movement
+values are relative fractions (`0.1` means 10%). Horizon is 1–52 weeks; risk policy
+is `expected` or `conservative`. Monetary values must be finite and nonnegative.
+
+Creation requires the latest evaluation to be completed and permit decisions;
+missing/pending/BLOCK evidence or changed artifacts return HTTP 409. Invalid or
+infeasible constraints return HTTP 422. The current production candidate remains
+BLOCK, so this endpoint correctly refuses scenarios for that candidate. A successful
+response records effective bounds, complete input constraints and evaluation hash.
+Retrieve the saved snapshot with `GET /scenarios/{id}`. It remains historical
+evidence if a newer evaluation changes policy; future registered optimization must
+revalidate current evidence. Scenario creation does not run the allocation solver.
 
 Default Bayesian runs discard warmup output using Nutpie's supported option.
 Use `--save-warmup` when investigating adaptation. Posterior draws, sampling
