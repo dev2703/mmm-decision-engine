@@ -41,7 +41,7 @@ dev = [
     "ruff>=0.11,<1", "pyright>=1.1.400,<2", "pandas-stubs>=2.3,<3",
     "numpy>=2.3,<2.4", {include-group = "test"},
 ]
-test = ["pytest>=8,<10", "httpx>=0.28,<1", "httpx2>=2,<3"]
+test = ["pytest>=8,<10", "httpx2>=2,<3"]
 evaluation = [
     "mmm-eval", "tensorflow>=2.19,<2.20", "tf-keras>=2.19,<2.20",
     {include-group = "test"},

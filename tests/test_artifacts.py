@@ -163,3 +163,32 @@ def test_relocated_identical_dataset_keeps_identity_and_temporal_evidence(
     shutil.copytree(first, moved)
     data, arrivals = load_model_inputs(moved, expected)
     assert len(data) == 26 and len(arrivals) == 26
+
+
+def test_decoded_data_must_match_quality_identity_before_modeling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pandas as pd
+
+    directory = tmp_path / "data"
+    write_dataset(generate_dataset(SyntheticConfig(weeks=26)).observations, directory)
+    changed = pd.read_parquet(directory / "clean.parquet")
+    changed.loc[0, "revenue"] = 1.0
+
+    def swapped_read(*args: object, **kwargs: object) -> pd.DataFrame:
+        return changed
+
+    monkeypatch.setattr(pd, "read_parquet", swapped_read)
+    with pytest.raises(ValueError, match="recorded quality evidence"):
+        load_model_ready(directory)
+
+
+def test_existing_dataset_rejects_before_profiling_invalid_input(
+    tmp_path: Path,
+) -> None:
+    import pandas as pd
+
+    with pytest.raises(FileExistsError):
+        write_dataset(pd.DataFrame(), tmp_path)
+    assert list(tmp_path.iterdir()) == []

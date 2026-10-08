@@ -1812,3 +1812,33 @@ objects from validated primitive `MMMConfig` values, then use
 A regression test rejects instruction-like prior text before external computation
 and traps any call to the upstream JSON expression loader. See the
 [pinned implementation](https://github.com/mutinex/mmm-eval/blob/71d20009feaa30dd9606ffface62f16fb1134265/mmm_eval/configs/rehydrators.py).
+
+Final simplification: consolidate relative ROI change in one helper shared by
+comparison, evaluation and release loading; zero/nonfinite quantities are missing
+evidence and must block, not crash a completed evaluation. Reject reused output
+directories before expensive profiling/fitting, retaining atomic creation at the
+write boundary. Verify decoded clean data against its recorded semantic hash in
+addition to file checksums. Remove the unused legacy httpx test dependency; the
+current TestClient uses httpx2. No new cache, interface hierarchy, or orchestration
+service was introduced during this audit.
+
+Final change review (Phases 0–5):
+
+- Summary: shared pure contracts/metrics/diagnostics, bounded-memory integrity checks,
+  conservative evidence handling and verified interruption recovery.
+- Blockers: none found for this local code change. Scientific release remains BLOCK
+  because of actual placebo failure and refit divergences; no thresholds were relaxed.
+- Major issues: none remaining in the selected audit. Shared/external artifact trust
+  and public-service authentication remain deployment requirements, not capabilities
+  claimed by the current local manifest checks.
+- Minor issues: upstream pandas deprecation and PyTensor's Numba convolution fallback
+  remain visible; no blanket warning suppression or vendor patch was added.
+- What is good: temporal/scaler isolation, immutable source artifacts, explicit
+  prediction/decision separation, raw evaluator fidelity and fail-closed release gates.
+- Simplification opportunities: future compatible evaluator releases may unify the
+  NumPy runtime profiles. Avoid mutable fitted-model caching without equivalence tests.
+- Verification still required: none for this slice. Final execution: 221 full-suite
+  tests passed (one optional-runtime skip; two Numba fallback warnings), 26 evaluation
+  runtime checks passed, and Ruff formatting/lint plus strict Pyright passed. The
+  decoded-artifact regression was rechecked after its final fixture correction.
+  Phase 0 GitHub/pre-commit automation remains deferred by the owner.

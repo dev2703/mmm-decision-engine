@@ -142,6 +142,8 @@ def evaluate_mmm(
     dataset: Path | None = None,
 ) -> dict[str, object]:
     """Evaluate training-only refits, keeping the main model's holdout sealed."""
+    if output.exists() and (not resume or (output / "evaluation.json").exists()):
+        raise FileExistsError(output)
     code_hash_at_start = source_code_hash()
     model_record = load_mmm_record(model_run)
     alternative = load_mmm_record(sensitivity_run)

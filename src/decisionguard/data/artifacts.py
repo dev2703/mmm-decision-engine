@@ -58,6 +58,8 @@ def write_dataset(
     simulation: bool = False,
 ) -> IntegrityResult:
     """A new run directory only; clean.parquet is a blocked candidate if flagged."""
+    if output.exists():
+        raise FileExistsError(output)
     result = clean_dataset(raw, config)
     output.mkdir(parents=True, exist_ok=False)
     raw.to_parquet(output / "raw.parquet", index=False)
@@ -131,7 +133,10 @@ def load_model_ready(output: Path) -> pd.DataFrame:
     if report.get("status") not in ("RESOLVED", "WARNING"):
         raise ValueError("modeling blocked by data-quality status")
     path = output / "clean.parquet"
-    return pd.read_parquet(path)
+    data = pd.read_parquet(path)
+    if dataset_hash(data) != report["clean_hash"]:
+        raise ValueError("clean data differs from recorded quality evidence")
+    return data
 
 
 def load_model_inputs(

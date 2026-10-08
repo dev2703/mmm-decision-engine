@@ -252,6 +252,8 @@ def run_baseline(
     hypothesis: str | None = None,
 ) -> BaselineResult:
     """Load through the quality gate, evaluate and persist a predictive-only run."""
+    if output.exists():
+        raise FileExistsError(output)
     code_hash_at_start = source_code_hash()
     data, availability = load_model_inputs(dataset)
     result = evaluate_baseline(data, config, availability)

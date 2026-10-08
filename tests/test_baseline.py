@@ -248,3 +248,13 @@ def test_unsigned_inputs_do_not_wrap_subtraction() -> None:
     )
     assert result["mae"] == 1.0 and result["rmse"] == 1.0
     assert result["wape"] == pytest.approx(1 / 3)
+
+
+def test_existing_experiment_rejects_before_loading_or_fitting(tmp_path: Path) -> None:
+    from decisionguard.experiments.baseline import run_baseline
+
+    output = tmp_path / "existing"
+    output.mkdir()
+    with pytest.raises(FileExistsError):
+        run_baseline(tmp_path / "nonexistent-data", output)
+    assert list(output.iterdir()) == []
