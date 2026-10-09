@@ -5,15 +5,31 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import create_engine, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from decisionguard.api.database import Dataset, EvaluationRun, ModelRun
 from decisionguard.api.evaluations import load_registered_model, verified_evaluation
 from decisionguard.config import Settings, artifact_path
-from decisionguard.data.artifacts import file_hash, load_model_ready, load_quality
-from decisionguard.data.integrity import dataset_hash
+from decisionguard.data.artifacts import file_hash, load_model_ready
 from decisionguard.models.artifacts import load_mmm_record
 from decisionguard.models.config import MMMConfig
+
+
+def _fail_running_job(
+    engine: Engine,
+    table: type[ModelRun] | type[EvaluationRun],
+    identifier: UUID | None,
+    error: Exception,
+) -> None:
+    if identifier is None:
+        return
+    with Session(engine) as session, session.begin():
+        job = session.get(table, identifier, with_for_update=True)
+        if job is not None and job.status == "RUNNING":
+            job.status = "FAILED"
+            job.error_type = type(error).__name__
+            job.finished_at = datetime.now(UTC)
 
 
 def train_experiment(experiment_id: UUID, settings: Settings) -> dict[str, Any]:
@@ -45,11 +61,9 @@ def train_experiment(experiment_id: UUID, settings: Settings) -> dict[str, Any]:
             run.status = "RUNNING"
             run.started_at = datetime.now(UTC)
         # No open transaction while sampling, and no scientific imports at API startup.
-        if (
-            load_quality(dataset_path) != expected_quality
-            or dataset_hash(load_model_ready(dataset_path)) != expected_hash
-        ):
+        if expected_quality["clean_hash"] != expected_hash:
             raise ValueError("registered dataset identity changed")
+        load_model_ready(dataset_path, expected_quality=expected_quality)
         from decisionguard.models.bayesian import train_mmm
 
         train_mmm(dataset_path, output, MMMConfig(**configuration))
@@ -70,13 +84,7 @@ def train_experiment(experiment_id: UUID, settings: Settings) -> dict[str, Any]:
             run.finished_at = datetime.now(UTC)
         return result
     except Exception as error:
-        if run_id is not None:
-            with Session(engine) as session, session.begin():
-                run = session.get(ModelRun, run_id, with_for_update=True)
-                if run is not None and run.status == "RUNNING":
-                    run.status = "FAILED"
-                    run.error_type = type(error).__name__
-                    run.finished_at = datetime.now(UTC)
+        _fail_running_job(engine, ModelRun, run_id, error)
         raise
     finally:
         engine.dispose()
@@ -121,10 +129,10 @@ def evaluate_model(model_run_id: UUID, settings: Settings) -> dict[str, Any]:
             or model.record_hash != config["model_record_hash"]
             or alternative.record_hash != config["sensitivity_record_hash"]
             or primary["dataset"]["hash"] != expected_hash
-            or load_quality(dataset_path) != expected_quality
-            or dataset_hash(load_model_ready(dataset_path)) != expected_hash
+            or expected_quality["clean_hash"] != expected_hash
         ):
             raise ValueError("registered evaluation inputs changed")
+        load_model_ready(dataset_path, expected_quality=expected_quality)
         from decisionguard.evaluation.mmm_eval import evaluate_mmm
 
         output = artifact_path(settings.artifact_root, evaluation.artifact_uri)
@@ -150,13 +158,7 @@ def evaluate_model(model_run_id: UUID, settings: Settings) -> dict[str, Any]:
             stored.finished_at = datetime.now(UTC)
         return result
     except Exception as error:
-        if evaluation_id is not None:
-            with Session(engine) as session, session.begin():
-                stored = session.get(EvaluationRun, evaluation_id, with_for_update=True)
-                if stored is not None and stored.status == "RUNNING":
-                    stored.status = "FAILED"
-                    stored.error_type = type(error).__name__
-                    stored.finished_at = datetime.now(UTC)
+        _fail_running_job(engine, EvaluationRun, evaluation_id, error)
         raise
     finally:
         engine.dispose()

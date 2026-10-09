@@ -1732,6 +1732,17 @@ expose the local service publicly before those boundaries are completed.
 
 ### Phase 7 registered model jobs
 
+Refactoring decision: share repeated UUID/default-created-time columns through
+SQLAlchemy's annotated column declarations rather than an ORM mixin hierarchy.
+Pre/post OpenAPI and ORM metadata snapshots match exactly, and real PostgreSQL
+migration checks remain clean. CLI commands reuse configuration selection over
+approved dataclass fields and a shared integrity configuration; command defaults,
+artifact contracts and scientific gates remain explicit. No dependency or schema
+change is required. Use an explicit column override if a table later needs a
+different default. Full verification after refactoring: 244 tests passed (one
+optional-runtime skip, two existing Numba warnings), 26 evaluation-profile checks
+passed, and Ruff/Pyright passed.
+
 Experiments snapshot a project-owned dataset, hypothesis and validated MMM config.
 Model-run requests queue immutable input/configuration references. The CLI claims
 a QUEUED run in a short `FOR UPDATE SKIP LOCKED` transaction, closes the transaction

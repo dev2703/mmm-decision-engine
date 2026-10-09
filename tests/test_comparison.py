@@ -1,11 +1,13 @@
 """Comparison grouping and deterministic repairs preserve scientific meaning."""
 
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from decisionguard.cli import main
 from decisionguard.data.artifacts import write_dataset
 from decisionguard.data.corruption import CorruptionConfig, corrupt_dataset
 from decisionguard.data.integrity import clean_dataset
@@ -16,11 +18,30 @@ from decisionguard.experiments.comparison import run_comparison
 
 def test_comparison_separates_information_context_and_records_real_runs(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     data = tmp_path / "data"
     write_dataset(generate_dataset(SyntheticConfig(weeks=104)).observations, data)
     output = tmp_path / "comparison"
-    summary = run_comparison(data, output, BaselineConfig(period=13, initial_train=52))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "decisionguard",
+            "compare",
+            "--dataset",
+            str(data),
+            "--output",
+            str(output),
+            "--period",
+            "13",
+            "--initial-train",
+            "52",
+        ],
+    )
+    main()
+    summary = json.loads(capsys.readouterr().out)
     record = json.loads((output / "comparison.json").read_text())
     assert summary == record
     models = {row["model"]: row for row in record["models"]}

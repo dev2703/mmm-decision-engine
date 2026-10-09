@@ -111,14 +111,10 @@ class PosteriorResponse:
 class BudgetConstraints:
     total: float
     current: Mapping[str, float]
-    floors: Mapping[str, float] = field(default_factory=lambda: dict[str, float]())
-    caps: Mapping[str, float] = field(default_factory=lambda: dict[str, float]())
-    max_movement: Mapping[str, float] = field(
-        default_factory=lambda: dict[str, float]()
-    )
-    protected_spend: Mapping[str, float] = field(
-        default_factory=lambda: dict[str, float]()
-    )
+    floors: Mapping[str, float] = field(default_factory=dict[str, float])
+    caps: Mapping[str, float] = field(default_factory=dict[str, float])
+    max_movement: Mapping[str, float] = field(default_factory=dict[str, float])
+    protected_spend: Mapping[str, float] = field(default_factory=dict[str, float])
 
     def bounds(
         self, channels: tuple[str, ...], release: ReleaseDecision

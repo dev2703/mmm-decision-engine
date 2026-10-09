@@ -2,9 +2,21 @@
 
 import argparse
 import json
-from dataclasses import fields
+from dataclasses import Field, fields, replace
 from pathlib import Path
+from typing import Any
 from uuid import UUID
+
+
+def _config_arguments(
+    args: argparse.Namespace, config_fields: tuple[Field[Any], ...]
+) -> dict[str, Any]:
+    values = vars(args)
+    return {
+        field.name: values[field.name]
+        for field in config_fields
+        if values.get(field.name) is not None
+    }
 
 
 def main() -> None:
@@ -170,11 +182,7 @@ def main() -> None:
         if args.command == "train":
             from decisionguard.models.config import MMMConfig
 
-            overrides = {
-                field.name: getattr(args, field.name)
-                for field in fields(MMMConfig)
-                if hasattr(args, field.name) and getattr(args, field.name) is not None
-            }
+            overrides = _config_arguments(args, fields(MMMConfig))
             if args.experiment_id is not None:
                 from decisionguard.api.jobs import train_experiment
                 from decisionguard.config import Settings
@@ -201,43 +209,28 @@ def main() -> None:
                 )
             )
             return
-        if args.command == "compare":
+        if args.command in ("compare", "baseline"):
             from decisionguard.experiments.baseline import BaselineConfig
-            from decisionguard.experiments.comparison import run_comparison
 
-            print(
-                json.dumps(
-                    run_comparison(
-                        args.dataset,
-                        args.output,
-                        BaselineConfig(
-                            period=args.period,
-                            initial_train=args.initial_train,
-                            horizon=args.horizon,
-                            gap=args.gap,
-                        ),
-                    )
+            config = BaselineConfig(
+                period=args.period,
+                initial_train=args.initial_train,
+                horizon=args.horizon,
+                gap=args.gap,
+                model=getattr(args, "model", "seasonal_naive"),
+            )
+            if args.command == "compare":
+                from decisionguard.experiments.comparison import run_comparison
+
+                summary = run_comparison(args.dataset, args.output, config)
+            else:
+                from decisionguard.experiments.baseline import run_baseline
+
+                result = run_baseline(
+                    args.dataset, args.output, config, hypothesis=args.hypothesis
                 )
-            )
-            return
-        if args.command == "baseline":
-            from decisionguard.experiments.baseline import BaselineConfig, run_baseline
-
-            result = run_baseline(
-                args.dataset,
-                args.output,
-                BaselineConfig(
-                    period=args.period,
-                    initial_train=args.initial_train,
-                    horizon=args.horizon,
-                    gap=args.gap,
-                    model=args.model,
-                ),
-                hypothesis=args.hypothesis,
-            )
-            print(
-                json.dumps({"cv": result.cv_metrics, "holdout": result.holdout_metrics})
-            )
+                summary = {"cv": result.cv_metrics, "holdout": result.holdout_metrics}
+            print(json.dumps(summary))
             return
         import pandas as pd
 
@@ -250,46 +243,33 @@ def main() -> None:
         for text in args.currency_rate:
             currency, factor = text.split("=", 1)
             rates.append((currency, float(factor)))
+        config = IntegrityConfig(
+            expected_start=getattr(args, "expected_start", None),
+            expected_end=getattr(args, "expected_end", None),
+            as_of=args.as_of,
+            duplicate_policy=args.duplicate_policy,
+            currency_rates=tuple(rates),
+        )
         if args.command == "prepare-data":
             generating = SyntheticConfig(
-                weeks=args.weeks,
-                seed=args.seed,
-                shift_week=args.shift_week,
-                shift_amount=args.shift_amount,
-                event_week=args.event_week,
-                event_amount=args.event_amount,
+                **_config_arguments(args, fields(SyntheticConfig))
             )
             clean = generate_dataset(generating)
             corrupting = CorruptionConfig(
-                missing_weeks=args.missing_weeks,
-                duplicate_rows=args.duplicate_rows,
-                seed=args.seed,
-                meta_alias=args.meta_alias,
-                unit_error_weeks=args.unit_error_weeks,
-                tracking_outage_weeks=args.tracking_outage_weeks,
-                erroneous_outlier_weeks=args.erroneous_outlier_weeks,
-                late_arrival_weeks=args.late_arrival_weeks,
-                arrival_delay_days=args.arrival_delay_days,
-                mixed_currency_weeks=args.mixed_currency_weeks,
-                negative_spend_weeks=args.negative_spend_weeks,
+                **_config_arguments(args, fields(CorruptionConfig))
             )
             dirty = corrupt_dataset(clean, corrupting)
-            config = IntegrityConfig(
-                expected_start=str(clean.observations["week"].min())[:10],
-                expected_end=str(clean.observations["week"].max())[:10],
-                as_of=args.as_of,
-                duplicate_policy=args.duplicate_policy,
-                currency_rates=tuple(rates),
+            result = write_simulation(
+                clean,
+                dirty,
+                args.output,
+                replace(
+                    config,
+                    expected_start=str(clean.observations["week"].min())[:10],
+                    expected_end=str(clean.observations["week"].max())[:10],
+                ),
             )
-            result = write_simulation(clean, dirty, args.output, config)
         else:
-            config = IntegrityConfig(
-                expected_start=args.expected_start,
-                expected_end=args.expected_end,
-                as_of=args.as_of,
-                duplicate_policy=args.duplicate_policy,
-                currency_rates=tuple(rates),
-            )
             result = write_dataset(pd.read_parquet(args.input), args.output, config)
         print(
             f"{result.report.status}: {len(result.clean)} candidate rows; "

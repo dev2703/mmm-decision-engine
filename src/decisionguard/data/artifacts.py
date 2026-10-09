@@ -123,13 +123,16 @@ def load_quality(output: Path) -> dict[str, Any]:
         path = output / name
         if file_hash(path) != provenance["artifacts"][name]:
             raise ValueError(f"{name} artifact hash mismatch")
-    report = json.loads((output / "quality.json").read_text())
-    return report
+    return json.loads((output / "quality.json").read_text())
 
 
-def load_model_ready(output: Path) -> pd.DataFrame:
+def load_model_ready(
+    output: Path, *, expected_quality: Mapping[str, object] | None = None
+) -> pd.DataFrame:
     """Enforce the quality gate and artifact integrity at the consuming boundary."""
     report = load_quality(output)
+    if expected_quality is not None and report != expected_quality:
+        raise ValueError("registered dataset identity changed")
     if report.get("status") not in ("RESOLVED", "WARNING"):
         raise ValueError("modeling blocked by data-quality status")
     path = output / "clean.parquet"

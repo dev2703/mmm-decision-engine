@@ -1,12 +1,17 @@
 """PostgreSQL metadata; large scientific arrays remain immutable artifacts."""
 
 from datetime import date, datetime
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+Identifier = Annotated[UUID, mapped_column(primary_key=True, default=uuid4)]
+CreatedAt = Annotated[
+    datetime, mapped_column(DateTime(timezone=True), server_default=func.now())
+]
 
 
 class Base(DeclarativeBase):
@@ -16,11 +21,9 @@ class Base(DeclarativeBase):
 class Project(Base):
     __tablename__ = "projects"
 
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[Identifier]
     name: Mapped[str]
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[CreatedAt]
     current_dataset_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("datasets.id", ondelete="SET NULL", use_alter=True)
     )
@@ -35,7 +38,7 @@ class Dataset(Base):
         CheckConstraint("date_end >= date_start"),
     )
 
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[Identifier]
     project_id: Mapped[UUID] = mapped_column(
         ForeignKey("projects.id", ondelete="RESTRICT"), index=True
     )
@@ -49,15 +52,13 @@ class Dataset(Base):
     quality_status: Mapped[str]
     configuration: Mapped[dict[str, Any]] = mapped_column(JSONB)
     quality: Mapped[dict[str, Any]] = mapped_column(JSONB)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[CreatedAt]
 
 
 class Experiment(Base):
     __tablename__ = "experiments"
 
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[Identifier]
     project_id: Mapped[UUID] = mapped_column(
         ForeignKey("projects.id", ondelete="RESTRICT"), index=True
     )
@@ -67,9 +68,7 @@ class Experiment(Base):
     hypothesis: Mapped[str]
     model_family: Mapped[str]
     configuration: Mapped[dict[str, Any]] = mapped_column(JSONB)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[CreatedAt]
 
 
 class ModelRun(Base):
@@ -78,7 +77,7 @@ class ModelRun(Base):
         CheckConstraint("status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED')"),
     )
 
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[Identifier]
     experiment_id: Mapped[UUID] = mapped_column(
         ForeignKey("experiments.id", ondelete="RESTRICT"), index=True
     )
@@ -95,9 +94,7 @@ class ModelRun(Base):
     training_window: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     metrics: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     error_type: Mapped[str | None]
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[CreatedAt]
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -108,7 +105,7 @@ class EvaluationRun(Base):
         CheckConstraint("status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED')"),
     )
 
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[Identifier]
     model_run_id: Mapped[UUID] = mapped_column(
         ForeignKey("model_runs.id", ondelete="RESTRICT"), index=True
     )
@@ -122,9 +119,7 @@ class EvaluationRun(Base):
     summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     record_hash: Mapped[str | None]
     error_type: Mapped[str | None]
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[CreatedAt]
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -137,7 +132,7 @@ class Scenario(Base):
         CheckConstraint("risk_policy IN ('expected', 'conservative')"),
     )
 
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[Identifier]
     model_run_id: Mapped[UUID] = mapped_column(
         ForeignKey("model_runs.id", ondelete="RESTRICT"), index=True
     )
@@ -152,6 +147,4 @@ class Scenario(Base):
     horizon_weeks: Mapped[int]
     risk_policy: Mapped[str]
     code_version: Mapped[str]
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[CreatedAt]

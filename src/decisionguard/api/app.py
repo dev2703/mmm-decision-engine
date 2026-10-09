@@ -516,13 +516,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     409, "Model health artifact integrity check failed"
                 ) from error
             return {
-                "model_run_id": str(run.id),
+                "model_run_id": run.id,
                 "model_status": run.model_status,
                 "decision_status": policy["state"] if policy else "BLOCK",
                 "diagnostics": diagnostics,
                 "policy": policy,
                 "evaluation": (
-                    EvaluationRunView.model_validate(evaluation).model_dump(mode="json")
+                    EvaluationRunView.model_validate(evaluation)
                     if evaluation is not None
                     else None
                 ),
