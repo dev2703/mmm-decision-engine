@@ -119,6 +119,47 @@ def evaluate_baseline(
     """Evaluate forecasts at each origin; availability is checked before training."""
     if config is None:
         config = BaselineConfig()
+    predictions, records = evaluate_folds(
+        data, config, temporal_folds(len(data), config), available_at
+    )
+    cv = predictions.loc[predictions["split"] == "cv"]
+    holdout = predictions.loc[predictions["split"] == "holdout"]
+    return BaselineResult(
+        predictions,
+        records,
+        forecast_metrics(
+            cv["actual"].to_numpy(dtype=np.float64),
+            cv["predicted"].to_numpy(dtype=np.float64),
+        ),
+        forecast_metrics(
+            holdout["actual"].to_numpy(dtype=np.float64),
+            holdout["predicted"].to_numpy(dtype=np.float64),
+        ),
+        config,
+    )
+
+
+def evaluate_folds(
+    data: pd.DataFrame,
+    config: BaselineConfig,
+    folds: tuple[TemporalFold, ...],
+    available_at: pd.Series[pd.Timestamp] | None = None,
+) -> tuple[pd.DataFrame, tuple[dict[str, object], ...]]:
+    """Fit on explicit prefixes, sharing preprocessing and availability guards."""
+    previous_end = 0
+    if not folds:
+        raise ValueError("at least one temporal fold is required")
+    for fold in folds:
+        if not (
+            config.initial_train
+            <= fold.train_end
+            <= fold.test_start
+            < fold.test_end
+            <= len(data)
+            and fold.test_start >= previous_end
+        ):
+            raise ValueError("invalid or overlapping temporal folds")
+        previous_end = fold.test_end
     if not data.columns.is_unique or not {"week", "revenue"} <= set(data.columns):
         raise ValueError("unique week and revenue columns are required")
     dates = pd.DatetimeIndex(data["week"])
@@ -153,8 +194,10 @@ def evaluate_baseline(
         raise ValueError("availability cannot precede week completion")
     frames: list[pd.DataFrame] = []
     records: list[dict[str, object]] = []
-    for fold_id, fold in enumerate(temporal_folds(len(data), config)):
+    for fold_id, fold in enumerate(folds):
         origin = dates[fold.test_start]
+        forecast_steps = fold.test_end - fold.train_end
+        forecast_gap = fold.test_start - fold.train_end
         if (availability[: fold.train_end] > origin).any():
             raise ValueError(
                 "training records unavailable at forecast origin; increase gap"
@@ -162,9 +205,9 @@ def evaluate_baseline(
         diagnostics: dict[str, object] = {}
         if config.model == "ets":
             forecast, diagnostics = ets_forecast(
-                revenue[: fold.train_end], config.gap + config.horizon, config.period
+                revenue[: fold.train_end], forecast_steps, config.period
             )
-            forecast = forecast.iloc[config.gap :].reset_index(drop=True)
+            forecast = forecast.iloc[forecast_gap:].reset_index(drop=True)
         elif config.model in ("ridge_raw", "ridge_domain", "hist_gradient_boosting"):
             if config.model.startswith("ridge"):
                 inner_start = fold.train_end - config.horizon
@@ -184,15 +227,15 @@ def evaluate_baseline(
                 config.horizon,
                 config.gap,
             )
-            forecast = forecast.iloc[config.gap :].reset_index(drop=True)
+            forecast = forecast.iloc[forecast_gap:].reset_index(drop=True)
         else:
             forecast = pd.DataFrame(
                 {
                     "predicted": seasonal_naive(
                         revenue[: fold.train_end],
-                        config.gap + config.horizon,
+                        forecast_steps,
                         config.period,
-                    )[config.gap :]
+                    )[forecast_gap:]
                 }
             )
         predicted = forecast["predicted"].to_numpy(dtype=np.float64)
@@ -227,22 +270,7 @@ def evaluate_baseline(
                 "diagnostics": diagnostics,
             }
         )
-    predictions = pd.concat(frames, ignore_index=True)
-    cv = predictions.loc[predictions["split"] == "cv"]
-    holdout = predictions.loc[predictions["split"] == "holdout"]
-    return BaselineResult(
-        predictions,
-        tuple(records),
-        forecast_metrics(
-            cv["actual"].to_numpy(dtype=np.float64),
-            cv["predicted"].to_numpy(dtype=np.float64),
-        ),
-        forecast_metrics(
-            holdout["actual"].to_numpy(dtype=np.float64),
-            holdout["predicted"].to_numpy(dtype=np.float64),
-        ),
-        config,
-    )
+    return pd.concat(frames, ignore_index=True), tuple(records)
 
 
 def run_baseline(

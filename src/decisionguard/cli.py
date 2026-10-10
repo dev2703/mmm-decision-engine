@@ -54,12 +54,18 @@ def main() -> None:
     compare = commands.add_parser(
         "compare", help="Run the predictive model ladder on identical windows"
     )
-    for command in (baseline, compare):
+    backtest = commands.add_parser(
+        "backtest", help="Freeze model selection, then score separate test and holdout"
+    )
+    backtest.add_argument("--test-weeks", type=int, default=13)
+    backtest.add_argument("--holdout-weeks", type=int, default=13)
+    backtest.add_argument("--include-mmm", action="store_true")
+    for command in (baseline, compare, backtest):
         command.add_argument("--dataset", type=Path, required=True)
         command.add_argument("--output", type=Path, required=True)
         command.add_argument("--period", type=int, default=52)
         command.add_argument(
-            "--initial-train", type=int, default=104 if command is compare else 52
+            "--initial-train", type=int, default=52 if command is baseline else 104
         )
         command.add_argument("--horizon", type=int, default=13)
         command.add_argument("--gap", type=int, default=0)
@@ -103,10 +109,11 @@ def main() -> None:
     training_source.add_argument("--dataset", type=Path)
     training_source.add_argument("--experiment-id", type=UUID)
     training.add_argument("--output", type=Path)
-    training.add_argument("--draws", type=int)
-    training.add_argument("--tune", type=int)
-    training.add_argument("--chains", type=int)
-    training.add_argument("--seed", type=int)
+    for command in (training, backtest):
+        command.add_argument("--draws", type=int)
+        command.add_argument("--tune", type=int)
+        command.add_argument("--chains", type=int)
+        command.add_argument("--seed", type=int)
     training.add_argument("--save-warmup", action="store_true", default=None)
     training.add_argument("--holdout", type=int)
     training.add_argument("--target-accept", type=float)
@@ -209,7 +216,7 @@ def main() -> None:
                 )
             )
             return
-        if args.command in ("compare", "baseline"):
+        if args.command in ("compare", "baseline", "backtest"):
             from decisionguard.experiments.baseline import BaselineConfig
 
             config = BaselineConfig(
@@ -219,7 +226,22 @@ def main() -> None:
                 gap=args.gap,
                 model=getattr(args, "model", "seasonal_naive"),
             )
-            if args.command == "compare":
+            if args.command == "backtest":
+                from decisionguard.experiments.backtest import run_backtest
+                from decisionguard.models.config import MMMConfig
+
+                overrides = _config_arguments(args, fields(MMMConfig))
+                if overrides and not args.include_mmm:
+                    raise ValueError("sampler options require --include-mmm")
+                summary = run_backtest(
+                    args.dataset,
+                    args.output,
+                    config,
+                    test_weeks=args.test_weeks,
+                    holdout_weeks=args.holdout_weeks,
+                    mmm_config=MMMConfig(**overrides) if args.include_mmm else None,
+                )
+            elif args.command == "compare":
                 from decisionguard.experiments.comparison import run_comparison
 
                 summary = run_comparison(args.dataset, args.output, config)

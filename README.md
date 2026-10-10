@@ -204,6 +204,44 @@ Ridge and gradient boosting condition on test spend/controls; compare them withi
 that group, separately from origin-only ETS/seasonal forecasts. CV selects models;
 holdout reports performance. No benchmark is authorized for budget optimization.
 
+Explicit train/validation/test/holdout capability experiment:
+
+```sh
+uv run decisionguard prepare-data --weeks 260 --seed 20261010 --output artifacts/capability-data
+PYTENSOR_FLAGS=cxx= LOKY_MAX_CPU_COUNT=1 OMP_NUM_THREADS=1 uv run decisionguard backtest \
+  --dataset artifacts/capability-data --output artifacts/capability \
+  --initial-train 156 --horizon 13 --test-weeks 26 --holdout-weeks 26 \
+  --include-mmm --seed 20261010
+```
+
+This produces 156 initial training weeks, 52 expanding-validation weeks, 26 test
+weeks and 26 final holdout weeks. `--horizon` controls validation fold size; all
+remaining development weeks, including a partial last fold, are scored. Defaults
+without these options are 104 initial training weeks and 13 weeks in each future
+block. At least one validation horizon and two initial seasons are required.
+This four-block protocol currently requires zero gap and rejects unavailable
+training observations; the existing `baseline`/`compare` commands support gaps.
+
+Validation MAE selects one benchmark per information context. `selection.json` is
+written before assessing future outcomes. Selected models refit on train plus
+validation; both test and holdout use that same fit, with no updates from test
+revenue. Ridge's inner tuning and all scalers stay inside each fit prefix. The MMM
+is a prespecified candidate with the same final training cutoff; its configuration
+is saved before assessment, and neither future block chooses its priors or sampler.
+Omit `--include-mmm` for a quick benchmark-only run. Optional `--draws`, `--tune`,
+`--chains`, and `--seed` configure the MMM; short runs are integration smoke checks,
+not release evidence.
+
+Inspect `partitions.parquet`, `split.json`, `validation.json`, `selection.json`,
+`predictions.parquet`, and the final completion marker `backtest.json`. They retain
+dates, fold preprocessing, configurations, hashes, per-block MAE/RMSE/WAPE and
+90% interval coverage where available. MMM posterior artifacts are under `mmm/`.
+Outputs require new directories. Once opened, holdout results must not guide
+changes claimed as independently tested on that same holdout. Synthetic results
+test a controlled world, not real-market generalization. The executed local report
+is `docs/experiments/capability-20261010.md`; research reports and generated artifacts
+remain untracked under the repository's existing privacy rules.
+
 
 Fit a real Bayesian candidate and a prior-sensitivity alternative:
 

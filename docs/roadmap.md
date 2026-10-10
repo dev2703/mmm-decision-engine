@@ -286,6 +286,13 @@ A single command creates an auditable cleaned dataset.
 
 Phase 3 — Baselines and Experiment Framework
 
+Capability follow-up: `decisionguard backtest` adds explicit train/validation/test/
+holdout membership, frozen validation-based selection, and optional Phase 4 MMM
+assessment at the same training cutoff. Reproduction is documented in README;
+the local execution report is `docs/experiments/capability-20261010.md` (untracked).
+This strengthens the scientific workflow;
+it does not advance Phase 7 persistence or authorize budget recommendations.
+
 Status: implemented. Seasonal naive, additive seasonal ETS with intervals and
 residual diagnostics, raw/domain-feature Ridge, and Histogram Gradient Boosting
 share temporal validation and availability checks. Ridge scaling, saturation

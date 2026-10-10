@@ -763,6 +763,43 @@ and [Histogram Gradient Boosting](https://scikit-learn.org/stable/modules/genera
 Revisit fold-specific hyperparameter grids only through temporal CV; never choose
 feature representations or priors by inspecting the final holdout repeatedly.
 
+### ADR: explicit four-block capability backtest
+
+Question: can the implemented model ladder generalize when model selection,
+development testing and final holdout are separately auditable?
+
+Decision: add `decisionguard backtest` using the existing temporal evaluator and
+MMM trainer. Partition contiguous weekly data into an initial training prefix,
+expanding validation, test and final holdout. Validate configuration and data
+quality before creating artifacts. Record every week's membership and the protocol
+before fitting. Select benchmark families by pooled validation MAE within their
+information context, persisting that choice before assessment. Refit winners on
+train plus validation, with nested Ridge tuning confined to that prefix. Predict
+the entire test-plus-holdout span from one fit; neither future target block updates
+the model. This also makes target perturbation invariance directly testable.
+
+Optional MMM uses prespecified priors/sampling and the same training endpoint.
+Its existing combined `holdout` artifact spans test plus final holdout; the backtest
+exports separate labels/metrics without changing or relabeling the original model
+manifest. Retain posterior predictive intervals and numerical diagnostics, and
+check that the trainer consumed the same dataset evidence. No predictive score
+grants release or replaces prior sensitivity, falsification or external evaluation.
+
+Alternatives: extending the existing single-holdout comparison would change its
+artifact contract; building a second model-fitting framework would duplicate
+preprocessing and availability guards. Instead extract the existing fold evaluator,
+leaving legacy commands unchanged. No new dependency or estimator is introduced.
+
+Tradeoffs: the final holdout measures longer lead times than the test block because
+we deliberately do not refit on test targets. Temporal dependence means disjoint
+blocks are not IID samples. Conditional models use realized future covariates;
+they cannot be ranked as origin-only forecasts. Default zero gap keeps four-block
+membership unambiguous; late records fail explicitly. Revisit rolling final refits
+or embargoed split membership only through a declared new protocol and untouched
+future data. A completed report is an opened holdout, not a permanently reusable
+selection dataset. Only `backtest.json` marks a completed run; failures retain
+partial audit artifacts. New output paths prevent overwriting evidence.
+
 16. Model Ladder
 
 Seasonal Naive
