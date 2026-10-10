@@ -73,6 +73,7 @@ def test_migrations_round_trip_on_postgresql(database: Settings) -> None:
         "datasets",
         "evaluation_runs",
         "scenarios",
+        "optimization_runs",
         "alembic_version",
     } <= set(inspect(engine).get_table_names())
     configuration = Config("alembic.ini")

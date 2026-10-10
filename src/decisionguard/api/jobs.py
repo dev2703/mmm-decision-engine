@@ -8,7 +8,13 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from decisionguard.api.database import Dataset, EvaluationRun, ModelRun
+from decisionguard.api.database import (
+    Dataset,
+    EvaluationRun,
+    ModelRun,
+    OptimizationRun,
+    Scenario,
+)
 from decisionguard.api.evaluations import load_registered_model, verified_evaluation
 from decisionguard.config import Settings, artifact_path
 from decisionguard.data.artifacts import file_hash, load_model_ready
@@ -18,7 +24,7 @@ from decisionguard.models.config import MMMConfig
 
 def _fail_running_job(
     engine: Engine,
-    table: type[ModelRun] | type[EvaluationRun],
+    table: type[ModelRun] | type[EvaluationRun] | type[OptimizationRun],
     identifier: UUID | None,
     error: Exception,
 ) -> None:
@@ -85,6 +91,103 @@ def train_experiment(experiment_id: UUID, settings: Settings) -> dict[str, Any]:
         return result
     except Exception as error:
         _fail_running_job(engine, ModelRun, run_id, error)
+        raise
+    finally:
+        engine.dispose()
+
+
+def optimize_scenario(scenario_id: UUID, settings: Settings) -> dict[str, Any]:
+    """Claim one optimization, refusing stale evidence before solve and publication."""
+    from decisionguard.api.optimizations import (
+        current_scenario_inputs,
+        scenario_snapshot,
+        verified_optimization,
+        verify_scenario,
+    )
+
+    engine = create_engine(settings.database_url, pool_pre_ping=True)
+    run_id: UUID | None = None
+    try:
+        with Session(engine, expire_on_commit=False) as session, session.begin():
+            run = session.scalar(
+                select(OptimizationRun)
+                .where(
+                    OptimizationRun.scenario_id == scenario_id,
+                    OptimizationRun.status == "QUEUED",
+                )
+                .order_by(OptimizationRun.created_at)
+                .with_for_update(skip_locked=True)
+                .limit(1)
+            )
+            if run is None:
+                raise ValueError("no queued optimization available for this scenario")
+            run_id = run.id
+            run.status = "RUNNING"
+            run.started_at = datetime.now(UTC)
+        with Session(engine, expire_on_commit=False) as session, session.begin():
+            scenario = session.get(Scenario, scenario_id)
+            if scenario is None:
+                raise ValueError("optimization scenario missing")
+            model, evaluation, alternative = current_scenario_inputs(session, scenario)
+            dataset = session.get(Dataset, model.dataset_id)
+            if dataset is None:
+                raise ValueError("optimization dataset missing")
+        # No transaction is open during posterior loading or numerical solves.
+        if run.configuration["scenario"] != scenario_snapshot(scenario):
+            raise ValueError("queued scenario changed")
+        primary = verify_scenario(
+            scenario, model, evaluation, alternative, settings.artifact_root
+        )
+        if (
+            model.record_hash != run.configuration["model_record_hash"]
+            or dataset.hash != primary["dataset"]["hash"]
+            or dataset.quality["clean_hash"] != dataset.hash
+        ):
+            raise ValueError("registered optimization inputs changed")
+        dataset_path = artifact_path(settings.artifact_root, dataset.artifact_uri)
+        load_model_ready(dataset_path, expected_quality=dataset.quality)
+        from decisionguard.optimization.allocation import BudgetConstraints
+        from decisionguard.optimization.artifacts import optimize_run
+
+        output = artifact_path(settings.artifact_root, run.artifact_uri)
+        result = optimize_run(
+            artifact_path(settings.artifact_root, model.artifact_uri),
+            artifact_path(settings.artifact_root, evaluation.artifact_uri),
+            output,
+            BudgetConstraints(**scenario.constraints),
+            horizon=scenario.horizon_weeks,
+            draws=run.configuration["draws"],
+            seed=run.configuration["seed"],
+            dataset=dataset_path,
+            sensitivity_run=artifact_path(
+                settings.artifact_root, alternative.artifact_uri
+            ),
+        )
+        run.record_hash = file_hash(output / "optimization.json")
+        summary = verified_optimization(run, scenario, settings.artifact_root)
+        with Session(engine) as session, session.begin():
+            current = session.get(Scenario, scenario_id)
+            if (
+                current is None
+                or scenario_snapshot(current) != run.configuration["scenario"]
+            ):
+                raise ValueError("queued scenario changed")
+            inputs = current_scenario_inputs(session, current, lock=True)
+            verify_scenario(current, *inputs, settings.artifact_root)
+            stored = session.get(OptimizationRun, run_id, with_for_update=True)
+            if (
+                stored is None
+                or stored.status != "RUNNING"
+                or stored.configuration != run.configuration
+            ):
+                raise ValueError("optimization no longer belongs to this worker")
+            stored.status = "SUCCEEDED"
+            stored.summary = summary
+            stored.record_hash = run.record_hash
+            stored.finished_at = datetime.now(UTC)
+        return result
+    except Exception as error:
+        _fail_running_job(engine, OptimizationRun, run_id, error)
         raise
     finally:
         engine.dispose()

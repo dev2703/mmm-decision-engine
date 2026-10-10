@@ -1880,10 +1880,9 @@ Current allocation need not sum to the requested total: budget changes are valid
 scenarios, subject to feasibility. All amounts denote constant weekly spend.
 
 GET returns the creation snapshot for inspection after restart or policy changes.
-It is historical evidence, not present optimization authority. The next registered
-optimizer must verify both stored scenario identity and current model/evaluation
-policy. This slice records `expected`/`conservative` preference and does not solve
-allocations or produce outcome claims. Registered optimization is separate work.
+It is historical evidence, not present optimization authority. Registered
+optimization verifies stored scenario identity and current model/evaluation policy,
+as described below; scenario creation itself does not perform numerical solves.
 
 Observed regression: valid JSON `1e400` becomes native infinity. Pydantic correctly
 rejects it, but the installed FastAPI handler reflects that value into a JSONResponse,
@@ -1915,6 +1914,74 @@ Change review:
   Bayesian scientific tests ran; no new production evaluation is claimed. OpenAPI
   includes both scenario routes and fresh API construction excludes PyMC, sklearn,
   TensorFlow and mmm-eval imports.
+
+### Phase 7 registered optimization
+
+Use the existing PostgreSQL/CLI job pattern: `POST /scenarios/{id}/optimize` accepts
+bounded posterior-draw count (2–2000, default 200) and seed, verifies current release
+and constraints, and returns a queued OptimizationRun. Snapshot the scenario and
+model-record identity. Duplicate active runs serialize on the same model row used
+by evaluation requests. `decisionguard optimize --scenario-id ID` exclusively claims
+the queued run; registered CLI calls reject parameter overrides. Existing path-based
+optimization remains supported. Current registered data/sensitivity paths are passed
+explicitly, so historical absolute artifact paths do not prevent relocation.
+
+Close database transactions before posterior loading and SciPy solves. Reuse the
+existing joint-state response, feasibility checks, expected/conservative alternatives,
+uncertainty, stability and extrapolation gates. Recheck scenario and latest evaluation
+under the model lock before publication; a newer pending/failed evaluation also makes
+the old scenario stale. Failed publication leaves no successful row or recommendation,
+even if complete orphan artifacts remain inspectable. Process death can leave RUNNING;
+operator-confirmed recovery is still required. No queue framework or automatic retry
+was added.
+
+Store a small JSONB decision summary and result checksum; keep allocation draws in
+the immutable artifact. `GET /optimization-runs/{id}` verifies its artifact and
+registered summary. The summary is historical; top-level `evidence_current` and
+`recommendation_allowed` determine whether it is presently usable. New evaluation
+requests revoke these flags while retaining historical output. A successful job can
+still disallow recommendation because of instability/extrapolation. No live budget
+execution is implemented.
+
+Local execution requires a PostgreSQL database and artifact root:
+
+```sh
+export DATABASE_URL='postgresql+psycopg://localhost/decisionguard'
+export ARTIFACT_ROOT='./artifacts'
+uv run alembic upgrade head
+uv run uvicorn decisionguard.api.app:create_app --factory
+# After POST /scenarios/{id}/optimize with a JSON body such as {}:
+uv run decisionguard optimize --scenario-id SCENARIO_UUID
+```
+
+Tradeoff: immutable result identity is prioritized over caching mutable local
+posteriors. On 2026-10-10, three complete release-loader calls against the existing
+production artifacts took 0.332/0.251/0.247 seconds locally. The two posterior files
+alone total 498,571,163 bytes. Cache warmth was uncontrolled; this is not a load test.
+Repeated guards can dominate quick solves and hold the model row lock while hashing.
+A compatible future improvement is verified content-addressed/versioned storage with
+short identity checks; caching solely by path or modification time would weaken trust.
+At 200 posterior states, optimization performs 200 state solves plus expected and
+conservative solves, so compute grows with the requested state count. Evaluation
+remains much more expensive: the existing upstream suite performs 20 full refits.
+
+Change review: no remaining code blockers or major issues found for this local
+slice. Shared scenario/result checks serve HTTP and CLI, and the solver and failure
+transition are reused; no new dependencies or speculative infrastructure were added.
+Known operational gaps are manual worker recovery, filesystem/database orphan
+reconciliation and public-service authentication. These are not claimed complete.
+
+Executed verification: Ruff formatting/lint, strict Pyright and diff whitespace
+checks passed; real PostgreSQL migration/schema/lifecycle tests plus the scientific
+suite passed 269 tests with one optional-runtime skip. The separate evaluation
+environment passed 26 adapter/policy/checkpoint tests. The lifecycle tests use
+explicit unit posterior fixtures while exercising the real numerical solver,
+release readers and PostgreSQL. They cover stale evidence before/during execution,
+exclusive claims, failure without publication, tampering, restart persistence and
+SUCCEEDED-but-non-actionable extrapolation. Existing real Bayesian sampling tests
+also ran; no new production release or external refit suite is claimed. Fresh-process
+OpenAPI verification includes the new routes without importing Bayesian/evaluation
+runtimes. No verification remains outstanding for this slice.
 
 ### Phases 0–5 audit and strengthening
 

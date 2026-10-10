@@ -69,3 +69,54 @@ def test_path_evaluation_requires_sensitivity_and_output_before_import(
         main()
     assert error.value.code == 2
     assert "requires --sensitivity-run and --output" in capsys.readouterr().err
+
+
+def test_registered_optimization_cli_uses_queued_scenario(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from decisionguard.api import jobs
+
+    identifier = uuid4()
+    calls: list[UUID] = []
+
+    def optimize(scenario_id: UUID, settings: Settings) -> dict[str, Any]:
+        assert settings.database_url.startswith("postgresql+psycopg://")
+        calls.append(scenario_id)
+        return {"alternatives": {"conservative": {"recommendation_allowed": False}}}
+
+    monkeypatch.setattr(jobs, "optimize_scenario", optimize)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://localhost/unit_test")
+    monkeypatch.setattr(
+        sys, "argv", ["decisionguard", "optimize", "--scenario-id", str(identifier)]
+    )
+    main()
+    assert calls == [identifier]
+    assert '"recommendation_allowed": false' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        ["--evaluation", "other"],
+        ["--constraints", "other"],
+        ["--output", "new"],
+        ["--draws", "3"],
+        ["--horizon", "4"],
+        ["--seed", "0"],
+    ],
+)
+def test_registered_optimization_rejects_configuration_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    override: list[str],
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["decisionguard", "optimize", "--scenario-id", str(uuid4()), *override],
+    )
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+    assert "stored configuration" in capsys.readouterr().err

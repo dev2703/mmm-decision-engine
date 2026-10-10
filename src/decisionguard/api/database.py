@@ -148,3 +148,24 @@ class Scenario(Base):
     risk_policy: Mapped[str]
     code_version: Mapped[str]
     created_at: Mapped[CreatedAt]
+
+
+class OptimizationRun(Base):
+    __tablename__ = "optimization_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED')"),
+    )
+
+    id: Mapped[Identifier]
+    scenario_id: Mapped[UUID] = mapped_column(
+        ForeignKey("scenarios.id", ondelete="RESTRICT"), index=True
+    )
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    artifact_uri: Mapped[str] = mapped_column(unique=True)
+    status: Mapped[str]
+    summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    record_hash: Mapped[str | None]
+    error_type: Mapped[str | None]
+    created_at: Mapped[CreatedAt]
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

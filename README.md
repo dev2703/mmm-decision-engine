@@ -15,7 +15,6 @@ uv run pyright
 uv run pytest
 ```
 
-Python 3.12 is the supported runtime. uv selects it using `.python-version`.
-The installed Python package is `decisionguard`; the distribution retains the
-repository name `mmm-decision-engine`.
+Python 3.12. See the [scope](docs/scope.md), [technical spec](docs/technical_spec.md)
+and [roadmap](docs/roadmap.md) for details. Run `uv run decisionguard --help` for commands.
 

@@ -95,13 +95,15 @@ def main() -> None:
     optimization = commands.add_parser(
         "optimize", help="Analyze release-gated budget allocations"
     )
-    optimization.add_argument("--model-run", type=Path, required=True)
-    optimization.add_argument("--evaluation", type=Path, required=True)
-    optimization.add_argument("--constraints", type=Path, required=True)
-    optimization.add_argument("--output", type=Path, required=True)
-    optimization.add_argument("--horizon", type=int, default=13)
-    optimization.add_argument("--draws", type=int, default=200)
-    optimization.add_argument("--seed", type=int, default=42)
+    optimization_source = optimization.add_mutually_exclusive_group(required=True)
+    optimization_source.add_argument("--model-run", type=Path)
+    optimization_source.add_argument("--scenario-id", type=UUID)
+    optimization.add_argument("--evaluation", type=Path)
+    optimization.add_argument("--constraints", type=Path)
+    optimization.add_argument("--output", type=Path)
+    optimization.add_argument("--horizon", type=int)
+    optimization.add_argument("--draws", type=int)
+    optimization.add_argument("--seed", type=int)
     training = commands.add_parser(
         "train", help="Fit and audit a Bayesian MMM candidate"
     )
@@ -133,19 +135,49 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.command == "optimize":
-            from decisionguard.optimization.allocation import BudgetConstraints
-            from decisionguard.optimization.artifacts import optimize_run
+            if args.scenario_id is not None:
+                from decisionguard.api.jobs import optimize_scenario
+                from decisionguard.config import Settings
 
-            quantities = json.loads(args.constraints.read_text())
-            record = optimize_run(
-                args.model_run,
-                args.evaluation,
-                args.output,
-                BudgetConstraints(**quantities),
-                horizon=args.horizon,
-                draws=args.draws,
-                seed=args.seed,
-            )
+                if any(
+                    value is not None
+                    for value in (
+                        args.evaluation,
+                        args.constraints,
+                        args.output,
+                        args.horizon,
+                        args.draws,
+                        args.seed,
+                    )
+                ):
+                    raise ValueError(
+                        "registered optimization uses its stored configuration"
+                    )
+                record = optimize_scenario(
+                    args.scenario_id, Settings.from_environment()
+                )
+            else:
+                if any(
+                    value is None
+                    for value in (args.evaluation, args.constraints, args.output)
+                ):
+                    raise ValueError(
+                        "Path optimization requires --evaluation, --constraints "
+                        "and --output"
+                    )
+                from decisionguard.optimization.allocation import BudgetConstraints
+                from decisionguard.optimization.artifacts import optimize_run
+
+                quantities = json.loads(args.constraints.read_text())
+                record = optimize_run(
+                    args.model_run,
+                    args.evaluation,
+                    args.output,
+                    BudgetConstraints(**quantities),
+                    horizon=13 if args.horizon is None else args.horizon,
+                    draws=200 if args.draws is None else args.draws,
+                    seed=42 if args.seed is None else args.seed,
+                )
             print(json.dumps(record["alternatives"]))
             return
         if args.command == "evaluate":

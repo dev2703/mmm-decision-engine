@@ -669,7 +669,12 @@ queued/failed evaluations cannot silently reuse an older passing result.
 Budget scenarios now persist validated constraints, effective channel bounds,
 planning horizon, risk preference and verified evaluation identity. Creation
 rejects blocked/pending/changed evidence and infeasible constraints; historical
-snapshots remain retrievable. Optimization persistence/execution APIs remain next.
+snapshots remain retrievable. Registered optimization now has a migration,
+HTTP queue/result contracts, exclusive CLI execution and verified result persistence.
+Scenario/evaluation identity is checked before computation and publication; newer
+evaluation requests revoke current recommendation authority without hiding history.
+Phase 7 remains open for frontend-facing model comparison, prediction/channel
+evidence and run-history read contracts. Agent/UI work has not started.
 
 Objective
 

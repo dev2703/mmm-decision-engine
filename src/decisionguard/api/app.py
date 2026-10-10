@@ -22,6 +22,7 @@ from decisionguard.api.database import (
     EvaluationRun,
     Experiment,
     ModelRun,
+    OptimizationRun,
     Project,
     Scenario,
 )
@@ -162,6 +163,27 @@ class ScenarioView(BaseModel):
     risk_policy: Literal["expected", "conservative"]
     code_version: str
     created_at: datetime
+
+
+class OptimizationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    draws: int = Field(default=200, ge=2, le=2000)
+    seed: int = Field(default=42, ge=0, le=2**32 - 1)
+
+
+class OptimizationRunView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    scenario_id: UUID
+    configuration: dict[str, Any]
+    status: Literal["QUEUED", "RUNNING", "SUCCEEDED", "FAILED"]
+    summary: dict[str, Any] | None
+    error_type: str | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    evidence_current: bool = False
+    recommendation_allowed: bool = False
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -597,5 +619,95 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if scenario is None:
                 raise HTTPException(404, "Scenario not found")
             return ScenarioView.model_validate(scenario)
+
+    @app.post(
+        "/scenarios/{scenario_id}/optimize",
+        response_model=OptimizationRunView,
+        status_code=202,
+    )
+    def queue_optimization(
+        scenario_id: UUID, body: OptimizationCreate
+    ) -> OptimizationRunView:
+        from decisionguard.api.optimizations import (
+            current_scenario_inputs,
+            scenario_snapshot,
+            verify_scenario,
+        )
+
+        with sessions.begin() as session:
+            scenario = session.get(Scenario, scenario_id)
+            if scenario is None:
+                raise HTTPException(404, "Scenario not found")
+            try:
+                model, evaluation, alternative = current_scenario_inputs(
+                    session, scenario, lock=True
+                )
+                verify_scenario(scenario, model, evaluation, alternative, root)
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                raise HTTPException(
+                    409, "Current verified scenario evidence required"
+                ) from error
+            active = session.scalar(
+                select(OptimizationRun.id).where(
+                    OptimizationRun.scenario_id == scenario_id,
+                    OptimizationRun.status.in_(["QUEUED", "RUNNING"]),
+                )
+            )
+            if active is not None:
+                raise HTTPException(409, "Scenario already has an active optimization")
+            parent = session.get(Experiment, model.experiment_id)
+            if parent is None:
+                raise HTTPException(409, "Model experiment missing")
+            identifier = uuid4()
+            run = OptimizationRun(
+                id=identifier,
+                scenario_id=scenario_id,
+                status="QUEUED",
+                configuration={
+                    **body.model_dump(),
+                    "scenario": scenario_snapshot(scenario),
+                    "model_record_hash": model.record_hash,
+                },
+                artifact_uri=f"projects/{parent.project_id}/optimizations/{identifier}",
+            )
+            session.add(run)
+            session.flush()
+            return OptimizationRunView.model_validate(run)
+
+    @app.get("/optimization-runs/{run_id}", response_model=OptimizationRunView)
+    def get_optimization(run_id: UUID) -> OptimizationRunView:
+        from decisionguard.api.optimizations import (
+            current_scenario_inputs,
+            verified_optimization,
+            verify_scenario,
+        )
+
+        with sessions() as session:
+            run = session.get(OptimizationRun, run_id)
+            if run is None:
+                raise HTTPException(404, "Optimization run not found")
+            view = OptimizationRunView.model_validate(run)
+            if run.status != "SUCCEEDED":
+                return view
+            scenario = session.get(Scenario, run.scenario_id)
+            if scenario is None:
+                raise HTTPException(409, "Optimization scenario missing")
+            try:
+                view.summary = verified_optimization(run, scenario, root)
+                # Historical output stays inspectable after a newer release request.
+                try:
+                    inputs = current_scenario_inputs(session, scenario)
+                except ValueError:
+                    return view
+                verify_scenario(scenario, *inputs, root)
+                view.evidence_current = True
+                view.recommendation_allowed = view.summary["selected"][
+                    "recommendation_allowed"
+                ]
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                raise HTTPException(
+                    409, "Optimization evidence integrity check failed"
+                ) from error
+            return view
 
     return app

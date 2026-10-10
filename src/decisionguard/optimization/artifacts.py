@@ -100,14 +100,16 @@ def optimize_run(
     horizon: int = 13,
     draws: int = 200,
     seed: int = 42,
+    dataset: Path | None = None,
+    sensitivity_run: Path | None = None,
 ) -> dict[str, object]:
     if output.exists():
         raise FileExistsError(output)
-    release, _ = load_release(evaluation, model_run)
+    release, _ = load_release(evaluation, model_run, sensitivity_run=sensitivity_run)
     if release.state == ReleaseState.BLOCK:
         raise ValueError("BLOCK model cannot reach optimization")
     response, selected = load_response(
-        model_run, horizon=horizon, draws=draws, seed=seed
+        model_run, horizon=horizon, draws=draws, seed=seed, dataset=dataset
     )
     result = analyze_allocation(response, constraints, release)
     result.update(
