@@ -673,8 +673,11 @@ snapshots remain retrievable. Registered optimization now has a migration,
 HTTP queue/result contracts, exclusive CLI execution and verified result persistence.
 Scenario/evaluation identity is checked before computation and publication; newer
 evaluation requests revoke current recommendation authority without hiding history.
-Phase 7 remains open for frontend-facing model comparison, prediction/channel
-evidence and run-history read contracts. Agent/UI work has not started.
+Verified read APIs now expose paginated training/holdout predictions, residuals,
+channel ROI/contribution intervals and conditional saturation curves, preserving
+units and registered provenance. Reading a blocked model never authorizes a decision.
+Phase 7 remains open for frontend-facing model comparison and run-history read
+contracts, plus remaining detailed evidence views. Agent/UI work has not started.
 
 Objective
 

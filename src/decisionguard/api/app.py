@@ -9,8 +9,9 @@ from datetime import date, datetime
 from time import perf_counter
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
+from zipfile import BadZipFile
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter
 from sqlalchemy import create_engine, func, select
@@ -25,6 +26,13 @@ from decisionguard.api.database import (
     OptimizationRun,
     Project,
     Scenario,
+)
+from decisionguard.api.model_evidence import (
+    ChannelEvidenceView,
+    PredictionSplit,
+    PredictionsView,
+    channel_evidence,
+    prediction_evidence,
 )
 from decisionguard.config import Settings, artifact_path
 
@@ -442,6 +450,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 .order_by(ModelRun.created_at.desc())
             )
             return [ModelRunView.model_validate(run) for run in runs]
+
+    def evidence_inputs(model_run_id: UUID) -> tuple[ModelRun, Dataset]:
+        # Detach metadata before disk reads; no open transaction while hashing arrays.
+        with sessions() as session:
+            run = session.get(ModelRun, model_run_id)
+            if run is None:
+                raise HTTPException(404, "Model run not found")
+            dataset = session.get(Dataset, run.dataset_id)
+            if dataset is None:
+                raise HTTPException(409, "Model dataset missing")
+            return run, dataset
+
+    @app.get("/model-runs/{model_run_id}/predictions", response_model=PredictionsView)
+    def get_predictions(
+        model_run_id: UUID,
+        split: PredictionSplit | None = None,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=520)] = 100,
+    ) -> PredictionsView:
+        run, dataset = evidence_inputs(model_run_id)
+        try:
+            return prediction_evidence(
+                run, dataset, root, split=split, offset=offset, limit=limit
+            )
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            raise HTTPException(
+                409, "Completed intact prediction evidence required"
+            ) from error
+
+    @app.get(
+        "/model-runs/{model_run_id}/channels/{channel}",
+        response_model=ChannelEvidenceView,
+    )
+    def get_channel_evidence(model_run_id: UUID, channel: str) -> ChannelEvidenceView:
+        run, dataset = evidence_inputs(model_run_id)
+        if channel not in run.configuration["channels"]:
+            raise HTTPException(404, "Channel not found in this model")
+        try:
+            return channel_evidence(run, dataset, root, channel)
+        except (
+            ValueError,
+            OSError,
+            KeyError,
+            TypeError,
+            EOFError,
+            BadZipFile,
+        ) as error:
+            raise HTTPException(
+                409, "Completed intact channel evidence required"
+            ) from error
 
     @app.post(
         "/model-runs/{model_run_id}/evaluate",

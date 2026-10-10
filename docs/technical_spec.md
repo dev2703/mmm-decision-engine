@@ -1106,6 +1106,8 @@ POST /projects/{id}/experiments
 POST /experiments/{id}/run
 GET /model-runs/{id}
 GET /projects/{id}/model-runs
+GET /model-runs/{id}/predictions
+GET /model-runs/{id}/channels/{channel}
 
 Evaluation
 
@@ -1914,6 +1916,64 @@ Change review:
   Bayesian scientific tests ran; no new production evaluation is claimed. OpenAPI
   includes both scenario routes and fresh API construction excludes PyMC, sklearn,
   TensorFlow and mmm-eval imports.
+
+### Phase 7 prediction and channel evidence
+
+The frontend needs chart evidence from completed registered models, including
+scientifically blocked candidates. Read saved Parquet/NPZ/JSON through the existing
+registered-manifest and component-checksum boundary; also match the registered
+dataset hash, configuration and training window. Close the metadata transaction
+before file verification. No fitting, fitted-model deserialization, migration or
+new dependency is needed.
+
+`GET /model-runs/{id}/predictions` supports `split=training|holdout`, nonnegative
+`offset` and `limit=1..520` (default 100). Total counts refer to the filtered split.
+Validate the full artifact before selecting a page: finite values, weekly ordering,
+training cutoff, split counts and ordered intervals. Return original AUD/week
+actuals, posterior predictive means, equal-tailed 90% predictive intervals and
+residuals defined as actual minus predicted. Training rows are in-sample; held-out
+predictions condition on realized controls/spend and are not origin-only forecasts.
+
+`GET /model-runs/{id}/channels/{channel}` returns saved posterior means and 90%
+intervals for training-window contribution (total AUD) and ROI (contribution divided
+by spend, AUD/AUD). It summarizes all saved chain/draw saturation responses using
+pointwise 5th/50th/95th percentiles. The x-axis is adstocked spend in AUD; this is a
+conditional saturation curve, not a direct weekly-budget response or causal proof.
+The registered channel order, draw dimensions, finite values and increasing grid
+are validated before returning the curve. Pickled NumPy arrays are forbidden.
+
+Both responses include model/dataset identities, checksums, training window,
+prediction context, limitations and the model-health link. These immutable evidence
+views intentionally do not copy a mutable release state: current health and scenario
+validation remain required for decision use. Unknown runs/channels return 404;
+incomplete, changed or malformed evidence returns 409; invalid query bounds return
+422. Local artifact paths and posterior draws are not exposed.
+
+Tradeoff: reading existing artifacts avoids another persisted summary/cache contract,
+but each request hashes the full model evidence and a channel request decompresses
+the saved curve tensor. Revisit with measured dashboard traffic or versioned immutable
+object storage. Do not cache by mutable path or modification time alone. Full ROI
+distribution and historical-spend-support read contracts remain separate work.
+
+Change review:
+
+- Summary: two typed evidence reads reuse saved scientific output and registered
+  integrity checks, without changing models or release policy.
+- Blockers / major issues: none remaining in this slice. Review reproduced empty
+  and truncated NPZ exceptions; both now return controlled 409 responses.
+- Minor issues: repeated artifact hashing/decompression remains the explicit I/O
+  tradeoff above. Authentication and worker recovery remain broader project gaps.
+- What is good: finite-number and temporal contracts, retained uncertainty,
+  path-free provenance, and inspectable evidence without decision authorization.
+- Simplification: reused checksum readers and Pydantic/NumPy/Parquet; shared only
+  the metadata/provenance boundary and used stdlib pairwise date validation.
+  No new dependency, schema, cache or service hierarchy.
+- Verification still required: none for this slice. Final full suite: 287 passed,
+  one optional-runtime skip; separate evaluation environment: 26 passed. Ruff
+  format/lint, strict Pyright, whitespace checks and fresh-process typed OpenAPI
+  checks passed. Existing real Bayesian sampling and PostgreSQL migration tests
+  ran; the new reader also served real small-chain training artifacts. No new
+  production evaluation or scientific release is claimed.
 
 ### Phase 7 registered optimization
 

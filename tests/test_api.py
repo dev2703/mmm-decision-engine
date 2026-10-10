@@ -261,6 +261,24 @@ def test_real_registered_training_publishes_checked_candidate(
         assert health.status_code == 200, health.text
         assert health.json()["decision_status"] == "BLOCK"
         assert health.json()["diagnostics"] == result["diagnostics"]
+        predictions = client.get(f"/model-runs/{run_id}/predictions")
+        assert predictions.status_code == 200, predictions.text
+        rows = predictions.json()["rows"]
+        assert len(rows) == 78
+        assert all(row["split"] == "training" for row in rows[:65])
+        assert all(row["split"] == "holdout" for row in rows[65:])
+        assert rows[64]["week"] == stored["training_window"]["end"]
+        for row in rows:
+            assert row["residual"] == pytest.approx(row["actual"] - row["predicted"])
+        channel = client.get(f"/model-runs/{run_id}/channels/search_spend")
+        assert channel.status_code == 200, channel.text
+        assert channel.json()["summary"] == result["channels"]["search_spend"]
+        curve = channel.json()["response_curve"]
+        assert len(curve) == 100
+        assert curve[0]["adstocked_spend"] == curve[0]["median"] == 0
+        assert all(
+            point["lower_90"] <= point["median"] <= point["upper_90"] for point in curve
+        )
         with pytest.raises(ValueError, match="no queued"):
             train_experiment(UUID(experiment_id), database)
 
