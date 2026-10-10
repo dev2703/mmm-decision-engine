@@ -1093,6 +1093,7 @@ Projects
 
 POST /projects
 GET /projects/{id}
+GET /projects/{id}/runs
 
 Data
 
@@ -1974,6 +1975,50 @@ Change review:
   checks passed. Existing real Bayesian sampling and PostgreSQL migration tests
   ran; the new reader also served real small-chain training artifacts. No new
   production evaluation or scientific release is claimed.
+
+### Phase 7 project run history
+
+`GET /projects/{id}/runs` lists training, evaluation and optimization jobs across
+the project's historical datasets. Each item carries its job kind, lifecycle
+status, timestamps, error type, registered record hash and upstream experiment,
+dataset, model, evaluation and scenario IDs where applicable. Completion hashes
+are metadata references; this endpoint does not attest that artifacts remain intact.
+SUCCEEDED means a job completed, including evaluations whose scientific result is
+BLOCK. Scientific summaries/authorization are deliberately absent; clients use
+verified model-health and optimization endpoints for current decision authority.
+
+Use a SQLAlchemy `UNION ALL` over existing PostgreSQL tables, joining ownership
+through the model's experiment. Apply optional `kind` and job `status` filters
+before one combined ordering by created time, UUID and kind descending. UUIDs may
+coincide across tables; kind completes the ordering and preserves distinct jobs.
+`limit` is 1–200 (default 50); `offset` is a nonnegative PostgreSQL bigint. Fetch
+at most limit + 1 rows and return `next_offset` when more exist. An existing empty
+project or exhausted page returns an empty list; unknown projects return 404 and
+invalid filters/bounds return 422. No files or scientific runtimes are loaded.
+
+Decision: direct relational projection avoids a duplicate job registry and loading
+all jobs into Python to sort/paginate. Offset pagination is sufficient for the local
+run browser; pages are live and new jobs/status changes between requests can shift
+them. Refresh from offset zero for an updated view. Revisit keyset pagination and
+query indexes if measured history size or concurrent use justifies them. No total
+count, cache, migration, new dependency or job execution path was added.
+
+Change review:
+
+- Summary: bounded project history exposes job lifecycle and lineage using existing
+  tables. No scientific metric or release-policy computation changed.
+- Blockers / major issues: none found in this slice.
+- Minor issues: live offset pages can shift during concurrent activity, as documented.
+- What is good: ownership filtering on every branch, one combined order/page,
+  preserved failures and historical dataset identities, and no artifact I/O.
+- Simplification: one shared column projection for three actual job types; no new
+  registry, summary cache, per-row lookup, total-count query or migration.
+- Verification still required: none for this slice. Ruff formatting/lint, strict
+  Pyright, whitespace and fresh-process OpenAPI/import checks passed. Full suite:
+  291 passed, one optional evaluation-runtime skip, two existing Numba object-mode
+  warnings. Real PostgreSQL migration/contracts and Bayesian sampling ran, including
+  a real completed training job retrieved through the new history route. No new
+  production scientific evaluation is claimed.
 
 ### Phase 7 registered optimization
 

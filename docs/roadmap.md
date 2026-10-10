@@ -676,8 +676,11 @@ evaluation requests revoke current recommendation authority without hiding histo
 Verified read APIs now expose paginated training/holdout predictions, residuals,
 channel ROI/contribution intervals and conditional saturation curves, preserving
 units and registered provenance. Reading a blocked model never authorizes a decision.
-Phase 7 remains open for frontend-facing model comparison and run-history read
-contracts, plus remaining detailed evidence views. Agent/UI work has not started.
+Project run history now combines training, evaluation and optimization job metadata
+with bounded pagination, filters and preserved upstream identities. Job completion
+is kept separate from scientific release authority.
+Phase 7 remains open for frontend-facing model comparison and remaining detailed
+evidence views. Agent/UI work has not started.
 
 Objective
 

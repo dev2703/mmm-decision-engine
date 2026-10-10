@@ -248,7 +248,7 @@ def test_real_registered_training_publishes_checked_candidate(
     from decisionguard.api.jobs import train_experiment
 
     with TestClient(create_app(database)) as client:
-        _, experiment_id, run_id = queued_experiment(client)
+        project_id, experiment_id, run_id = queued_experiment(client)
         result = train_experiment(UUID(experiment_id), database)
         assert result["diagnostics"]["diagnostic_status"] == "INCOMPLETE"
         stored = client.get(f"/model-runs/{run_id}").json()
@@ -257,6 +257,12 @@ def test_real_registered_training_publishes_checked_candidate(
         assert stored["training_window"]["rows"] == 65
         assert stored["code_version"] == result["code_hash"]
         assert stored["finished_at"] is not None
+        history = client.get(f"/projects/{project_id}/runs").json()["items"]
+        assert len(history) == 1
+        assert history[0]["kind"] == "training"
+        assert history[0]["id"] == history[0]["model_run_id"] == run_id
+        assert history[0]["status"] == "SUCCEEDED"
+        assert history[0]["record_hash"]
         health = client.get(f"/model-runs/{run_id}/health")
         assert health.status_code == 200, health.text
         assert health.json()["decision_status"] == "BLOCK"

@@ -27,6 +27,12 @@ from decisionguard.api.database import (
     Project,
     Scenario,
 )
+from decisionguard.api.history import (
+    JobStatus,
+    RunHistoryPage,
+    RunKind,
+    project_run_history,
+)
 from decisionguard.api.model_evidence import (
     ChannelEvidenceView,
     PredictionSplit,
@@ -450,6 +456,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 .order_by(ModelRun.created_at.desc())
             )
             return [ModelRunView.model_validate(run) for run in runs]
+
+    @app.get("/projects/{project_id}/runs", response_model=RunHistoryPage)
+    def list_runs(
+        project_id: UUID,
+        kind: RunKind | None = None,
+        status: JobStatus | None = None,
+        offset: Annotated[int, Query(ge=0, le=2**63 - 1)] = 0,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> RunHistoryPage:
+        with sessions() as session:
+            if session.get(Project, project_id) is None:
+                raise HTTPException(404, "Project not found")
+            return project_run_history(
+                session,
+                project_id,
+                kind=kind,
+                status=status,
+                offset=offset,
+                limit=limit,
+            )
 
     def evidence_inputs(model_run_id: UUID) -> tuple[ModelRun, Dataset]:
         # Detach metadata before disk reads; no open transaction while hashing arrays.
