@@ -1226,11 +1226,36 @@ Reports also include task success, latency, token counts and cost. Label scripte
 fixtures `scripted_contract`; only an actual provider run can assess language
 understanding or prompt-injection susceptibility in the model itself.
 
-Initial tool surface:
+#### Phase 8 change review and executed verification
 
-get_data_quality(project_id)
+- Summary: the provider-independent core adds seven scoped tools, a bounded
+  evidence-selection protocol, request-linked traces and contract evaluations.
+- Blockers: none found for the requested core. Claude integration and live-model
+  evaluation are explicitly deferred, so this is not a deployed conversational agent.
+- Major issues: none remaining in this scope. Existing project APIs still require
+  deployment authentication; the agent's project scoping is not authentication.
+- Minor issues: the local PyTensor compiler fallback emits an existing Numba object
+  mode warning. No scientific gate was relaxed to address it.
+- What is good: actual PostgreSQL/artifact boundaries reject placebo BLOCK,
+  cross-project access, changed evidence and stale scenarios. Tests preserve
+  restrictions, intervals, queued receipts and redacted failure traces.
+- Simplification: reuse existing API handlers, release policy and optimizer queue;
+  share the scenario gate for read-only validation. No new runtime dependency,
+  provider SDK, job system or database migration was introduced.
+- Verification: Ruff lint and format checks, strict Pyright and diff whitespace
+  checks passed. The full suite executed 312 passing tests and one skip; five
+  scientific tests hit the already documented macOS `-ld64` issue. Rerunning those
+  with `PYTENSOR_FLAGS=cxx=` passed all five (317 passing tests across both runs).
+  The final runtime-only check also passed all 12 tests after the lint correction.
+  PostgreSQL used the dedicated `decisionguard_test` database with isolated schemas.
+- Verification still required: evaluate the eventual Claude adapter on the five
+  roadmap prompts and the additional adversarial cases with real usage/cost data.
 
-compare_models(project_id)
+Implemented tool surface (project scope comes from the query):
+
+get_data_quality()
+
+compare_models(offset=0, limit=5)
 
 get_model_health(model_run_id)
 
@@ -1239,20 +1264,16 @@ get_channel_evidence(
     channel,
 )
 
-run_scenario(
-    model_run_id,
-    scenario,
-)
+run_scenario(scenario_id)
 
-validate_constraints(scenario)
+validate_constraints(model_run_id, scenario)
 
 get_decision_stability(
     optimization_run_id
 )
 
-explain_experiment(
-    experiment_id
-)
+`explain_experiment(experiment_id)` remains a future extension, outside the seven
+Phase 8 tools.
 
 Never expose:
 
