@@ -680,7 +680,8 @@ Project run history now combines training, evaluation and optimization job metad
 with bounded pagination, filters and preserved upstream identities. Job completion
 is kept separate from scientific release authority.
 Phase 7 remains open for frontend-facing model comparison and remaining detailed
-evidence views. Agent/UI work has not started.
+evidence views. Phase 8's provider-independent agent core is now implemented;
+live provider integration and UI work remain deferred.
 
 Objective
 
@@ -743,6 +744,17 @@ Exit Criteria
 Everything required by frontend exists behind stable API behaviour.
 
 Phase 8 — Agent
+
+Status: provider-independent core implemented; Claude API integration deferred by
+the project owner. Seven typed, project-scoped tools reuse verified backend
+evidence, read-only constraint validation and registered optimization queues.
+The bounded runtime returns cited tool records, preserves policy/uncertainty,
+records redacted traces and exposes deterministic evaluation metrics. Scripted
+adversarial tests cover the five cases below plus schema errors, foreign IDs,
+changed/stale evidence, failures, duplicate writes and execution limits.
+No live LLM behavior, latency, token usage or cost has been measured. The default
+query endpoint returns 503 until a provider is supplied; live language-model
+evaluation and fluent synthesis are not claimed complete.
 
 Objective
 

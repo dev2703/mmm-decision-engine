@@ -11,6 +11,12 @@ from decisionguard.data.artifacts import file_hash, write_json
 from decisionguard.evaluation.policy import REQUIRED_TESTS
 
 
+def _refits_hash(refits: list[dict[str, Any]]) -> str:
+    return sha256(
+        json.dumps(refits, sort_keys=True, allow_nan=False).encode()
+    ).hexdigest()
+
+
 def initialize_progress(
     output: Path, identity: dict[str, object], *, resume: bool
 ) -> None:
@@ -40,10 +46,7 @@ def load_checkpoint(
     if file_hash(table) != record["table_hash"]:
         raise ValueError(f"evaluation checkpoint changed: {test}")
     refits = record["refits"]
-    digest = sha256(
-        json.dumps(refits, sort_keys=True, allow_nan=False).encode()
-    ).hexdigest()
-    if digest != record["refits_hash"]:
+    if _refits_hash(refits) != record["refits_hash"]:
         raise ValueError(f"evaluation checkpoint refits changed: {test}")
     return pd.read_parquet(table), refits
 
@@ -65,9 +68,7 @@ def save_checkpoint(
         {
             "table_hash": file_hash(table_path),
             "refits": refits,
-            "refits_hash": sha256(
-                json.dumps(refits, sort_keys=True, allow_nan=False).encode()
-            ).hexdigest(),
+            "refits_hash": _refits_hash(refits),
         },
     )
     temporary.replace(output / f"{test}.json")

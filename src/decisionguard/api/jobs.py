@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import ColumnElement, create_engine, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,18 @@ from decisionguard.config import Settings, artifact_path
 from decisionguard.data.artifacts import file_hash, load_model_ready
 from decisionguard.models.artifacts import load_mmm_record
 from decisionguard.models.config import MMMConfig
+
+
+def _oldest_queued[Job: (ModelRun, EvaluationRun, OptimizationRun)](
+    session: Session, table: type[Job], owner: ColumnElement[bool]
+) -> Job | None:
+    return session.scalar(
+        select(table)
+        .where(owner, table.status == "QUEUED")
+        .order_by(table.created_at)
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
 
 
 def _fail_running_job(
@@ -44,14 +56,8 @@ def train_experiment(experiment_id: UUID, settings: Settings) -> dict[str, Any]:
     run_id: UUID | None = None
     try:
         with Session(engine) as session, session.begin():
-            run = session.scalar(
-                select(ModelRun)
-                .where(
-                    ModelRun.experiment_id == experiment_id, ModelRun.status == "QUEUED"
-                )
-                .order_by(ModelRun.created_at)
-                .with_for_update(skip_locked=True)
-                .limit(1)
+            run = _oldest_queued(
+                session, ModelRun, ModelRun.experiment_id == experiment_id
             )
             if run is None:
                 raise ValueError("no queued model run available for this experiment")
@@ -109,15 +115,8 @@ def optimize_scenario(scenario_id: UUID, settings: Settings) -> dict[str, Any]:
     run_id: UUID | None = None
     try:
         with Session(engine, expire_on_commit=False) as session, session.begin():
-            run = session.scalar(
-                select(OptimizationRun)
-                .where(
-                    OptimizationRun.scenario_id == scenario_id,
-                    OptimizationRun.status == "QUEUED",
-                )
-                .order_by(OptimizationRun.created_at)
-                .with_for_update(skip_locked=True)
-                .limit(1)
+            run = _oldest_queued(
+                session, OptimizationRun, OptimizationRun.scenario_id == scenario_id
             )
             if run is None:
                 raise ValueError("no queued optimization available for this scenario")
@@ -199,15 +198,8 @@ def evaluate_model(model_run_id: UUID, settings: Settings) -> dict[str, Any]:
     evaluation_id: UUID | None = None
     try:
         with Session(engine, expire_on_commit=False) as session, session.begin():
-            evaluation = session.scalar(
-                select(EvaluationRun)
-                .where(
-                    EvaluationRun.model_run_id == model_run_id,
-                    EvaluationRun.status == "QUEUED",
-                )
-                .order_by(EvaluationRun.created_at)
-                .with_for_update(skip_locked=True)
-                .limit(1)
+            evaluation = _oldest_queued(
+                session, EvaluationRun, EvaluationRun.model_run_id == model_run_id
             )
             if evaluation is None:
                 raise ValueError("no queued evaluation available for this model")

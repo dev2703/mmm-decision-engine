@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 import numpy as np
 import pandas as pd
@@ -12,6 +12,7 @@ from numpy.typing import NDArray
 
 from decisionguard.data.artifacts import (
     dataset_evidence,
+    dependency_lock_hash,
     file_hash,
     load_model_inputs,
     source_code_hash,
@@ -21,6 +22,20 @@ from decisionguard.experiments.ets import ets_forecast
 from decisionguard.experiments.metrics import forecast_metrics
 from decisionguard.experiments.regression import regression_forecast
 
+BaselineModel = Literal[
+    "seasonal_naive", "ets", "ridge_raw", "ridge_domain", "hist_gradient_boosting"
+]
+BASELINE_MODELS: tuple[BaselineModel, ...] = get_args(BaselineModel)
+
+
+def prediction_context(model: str) -> str:
+    """Forecasts see only past revenue; regressors condition on realized inputs."""
+    return (
+        "forecast_from_origin"
+        if model in ("seasonal_naive", "ets")
+        else "conditional_on_realized_covariates"
+    )
+
 
 @dataclass(frozen=True)
 class BaselineConfig:
@@ -28,9 +43,7 @@ class BaselineConfig:
     initial_train: int = 52
     horizon: int = 13
     gap: int = 0
-    model: Literal[
-        "seasonal_naive", "ets", "ridge_raw", "ridge_domain", "hist_gradient_boosting"
-    ] = "seasonal_naive"
+    model: BaselineModel = "seasonal_naive"
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -42,13 +55,7 @@ class BaselineConfig:
                 raise ValueError(f"{name} must be a positive integer")
         if type(self.gap) is not int or self.gap < 0:
             raise ValueError("gap must be a nonnegative integer")
-        if self.model not in (
-            "seasonal_naive",
-            "ets",
-            "ridge_raw",
-            "ridge_domain",
-            "hist_gradient_boosting",
-        ):
+        if self.model not in BASELINE_MODELS:
             raise ValueError("unsupported baseline model")
         if self.model == "ets" and self.initial_train < 2 * self.period:
             raise ValueError("seasonal ETS requires two complete training seasons")
@@ -290,11 +297,7 @@ def run_baseline(
     record = {
         "model_family": result.config.model,
         "model_status": "PREDICTIVE_ONLY",
-        "prediction_context": (
-            "forecast_from_origin"
-            if result.config.model in ("ets", "seasonal_naive")
-            else "conditional_on_realized_covariates"
-        ),
+        "prediction_context": prediction_context(result.config.model),
         "hypothesis": hypothesis
         or (
             f"A {result.config.period}-week {result.config.model} benchmark provides "
@@ -347,8 +350,7 @@ def run_baseline(
         "code_hash": code_hash_at_start,
         "predictions_hash": file_hash(output / "predictions.parquet"),
     }
-    lock = Path(__file__).resolve().parents[3] / "uv.lock"
-    if lock.is_file():
-        record["dependency_lock_hash"] = file_hash(lock)
+    if (lock_hash := dependency_lock_hash()) is not None:
+        record["dependency_lock_hash"] = lock_hash
     write_json(output / "experiment.json", record)
     return result

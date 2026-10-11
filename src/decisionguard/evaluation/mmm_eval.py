@@ -25,6 +25,7 @@ from mmm_eval.core.validation_tests_models import (  # pyright: ignore[reportMis
 from numpy.typing import NDArray
 
 from decisionguard.data.artifacts import (
+    DEPENDENCY_LOCK,
     file_hash,
     load_model_inputs,
     source_code_hash,
@@ -215,7 +216,7 @@ def evaluate_mmm(
         "sensitivity_record_hash": file_hash(sensitivity_run / "model.json"),
         "dataset_hash": dataset_hash(data),
         "code_hash": code_hash_at_start,
-        "lock_hash": file_hash(Path("uv.lock")),
+        "lock_hash": file_hash(DEPENDENCY_LOCK),
         "configuration": upstream_config.fit_config_dict,
         "runtime_versions": runtime_versions,
         "upstream_commit": UPSTREAM_COMMIT,

@@ -36,6 +36,7 @@ ENV/
 __pycache__/
 *.py[oc]
 ssh
+.DS_Store
 
 # Keep local research private; publish only the canonical project contract.
 /docs/*

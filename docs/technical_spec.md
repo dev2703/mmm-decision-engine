@@ -1129,6 +1129,103 @@ Do not create CRUD endpoints for every database object just because the object e
 
 26. Agent Tools
 
+### Phase 8 design decision: bounded, provider-independent exploration
+
+Problem: users currently need to know API routes to inspect quality, release
+reasons, channel uncertainty and budget scenarios. Natural-language tool selection
+can make this evidence accessible without transferring analytical authority to an
+LLM. The owner has deferred provider integration and intends to add Claude later.
+
+Decision: add a typed provider interface, a bounded sequential tool loop and seven
+project-scoped tools over existing verified backend operations. No provider SDK,
+API credentials or live model calls are required in this phase. `/agent/query`
+fails explicitly when no provider is installed. Scripted providers test the same
+runtime that a future Claude adapter will use; they are not language-model evals.
+
+An answer selects tool evidence by call ID. The server renders the full selected
+evidence, including units, uncertainty, provenance and policy, rather than exposing
+unverified generated prose or numbers. Missing statistics remain unavailable.
+This sacrifices fluent synthesis for deterministic grounding; revisit with a
+separately evaluated claim-verification design when the Claude adapter is added.
+Free-form synthesis with citations alone was rejected because a citation does not
+verify a number or a recommendation. A keyword-based simulated language model was
+rejected because it would not validate real natural-language behavior.
+
+Scenario creation remains hypothetical: the agent can queue an existing scenario
+only when its exact ID is explicitly authorized in the request. It cannot create
+or change live campaigns. `validate_constraints` is read-only and shares the
+scenario creation gate. The existing CLI executes queued optimization jobs.
+Repeated identical scenario calls within one query reuse their result, avoiding
+duplicate writes; reads always check evidence again. Cross-request execution
+retains the backend's active-job gate.
+
+Acceptance: all seven tools reject malformed arguments and cross-project IDs;
+BLOCK, stale or changed evidence cannot reach optimization; missing evidence and
+provider failures do not produce fabricated answers; campaign text stays in tool
+data; every displayed result comes from a recorded tool call. Traces record prompt
+and code versions, hashes of inputs/results, tool order, status, latency, usage
+and reported cost (unknown remains null), without persisting raw prompts or data.
+The five roadmap attacks plus malformed calls, duplicate calls, project isolation,
+provider failures and iteration limits must execute as regression cases.
+
+Constraints and limits: bounded query size, call count and evidence size; provider
+adapters must enforce their own network timeout. Project scoping is not user
+authentication. Comparison exposes registered Bayesian candidates with verified
+metrics and windows, not unregistered baseline experiments or an automatic winner.
+Live tool-selection accuracy, language understanding, token cost and latency need
+evaluation against the eventual Claude model before deployment.
+
+#### Connecting Claude later
+
+Implement `decisionguard.agent.contracts.Provider`: a `model` identifier and a
+synchronous `respond(ProviderContext) -> ProviderReply` method, then supply the
+instance to `create_app(settings, agent_provider=provider)`. The adapter must set
+network timeouts, bound provider output, keep each query independent and be safe
+for concurrent HTTP requests. It must place `instructions` in the system role,
+the user's query in the user role, and returned records in tool-result blocks.
+Do not promote campaign names, database labels or artifact contents to system
+instructions. No conversation history or secrets are persisted by the core.
+
+Provider turns have one of these shapes (inside `ProviderReply.turn`):
+
+```json
+{"kind":"tool","name":"get_model_health","arguments":{"model_run_id":"UUID"}}
+{"kind":"answer","evidence_ids":["e1"],"unavailable":false}
+```
+
+The adapter reports actual input/output tokens and, when known, cost in `usage`;
+missing or incomplete accounting remains null. No model or price is hard-coded.
+The core makes at most eight provider calls and accepts at most 64 KB per tool
+result. Unsupported tool names are denied, invalid arguments are rejected, and
+unknown evidence IDs or unverified final prose cannot become an answer. Failed
+tools remain visible in `issues` even if the provider omits them. Queued job
+receipts survive later provider failure. Evidence includes its observation time;
+it is a snapshot, and every subsequent scenario execution rechecks authority.
+
+`POST /agent/query` accepts `project_id`, `message` and optional
+`authorized_scenario_id`. Project scope is fixed by the request; tool arguments
+cannot override it. `get_data_quality` and `compare_models` use that scope
+implicitly. `validate_constraints` takes a model ID and the existing ScenarioCreate
+contract. `run_scenario` takes only a persisted scenario ID matching the caller's
+authorization; callers create scenarios through the existing API first. A queued
+result requires `decisionguard optimize --scenario-id ID` before stability exists.
+
+Traces are stored under `ARTIFACT_ROOT/agent-traces/{request_id}.json`; the ID also
+matches the HTTP correlation header. They include resource UUIDs and hashes,
+not raw messages, budgets or tool payloads. The trace is reserved before work and
+updated through atomic replacement after tool calls; an interrupted query can
+remain marked running. Trace persistence is local, not a distributed audit store.
+
+`agent.evaluation.evaluate_answers` compares externally specified `EvalCase`
+expectations with captured answers. Tool accuracy compares ordered tool choices;
+schema accuracy includes provider envelopes and tool arguments. Grounded-claim
+rate measures exact equality of displayed evidence records to recorded result
+hashes, not relevance or free-text factuality. Policy violations count unauthorized
+queue receipts and successful answers to cases whose oracle requires denial.
+Reports also include task success, latency, token counts and cost. Label scripted
+fixtures `scripted_contract`; only an actual provider run can assess language
+understanding or prompt-injection susceptibility in the model itself.
+
 Initial tool surface:
 
 get_data_quality(project_id)

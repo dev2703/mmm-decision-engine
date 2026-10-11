@@ -21,6 +21,8 @@ from decisionguard.data.integrity import (
 )
 from decisionguard.data.synthetic import SyntheticDataset
 
+DEPENDENCY_LOCK = Path(__file__).resolve().parents[3] / "uv.lock"
+
 
 def file_hash(path: Path) -> str:
     """SHA-256 with bounded memory, including large posterior artifacts."""
@@ -50,6 +52,11 @@ def source_code_hash() -> str:
     return code.hexdigest()
 
 
+def dependency_lock_hash() -> str | None:
+    """None when the package runs without its source checkout's lock file."""
+    return file_hash(DEPENDENCY_LOCK) if DEPENDENCY_LOCK.is_file() else None
+
+
 def write_dataset(
     raw: pd.DataFrame,
     output: Path,
@@ -73,9 +80,8 @@ def write_dataset(
             for name in ("raw.parquet", "clean.parquet", "quality.json")
         },
     }
-    lock = Path(__file__).resolve().parents[3] / "uv.lock"
-    if lock.is_file():
-        provenance["dependency_lock_hash"] = file_hash(lock)
+    if (lock_hash := dependency_lock_hash()) is not None:
+        provenance["dependency_lock_hash"] = lock_hash
     write_json(output / "provenance.json", provenance)
     return result
 

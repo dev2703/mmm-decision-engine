@@ -8,15 +8,18 @@ import pandas as pd
 
 from decisionguard.data.artifacts import (
     dataset_evidence,
+    dependency_lock_hash,
     file_hash,
     load_model_inputs,
     source_code_hash,
     write_json,
 )
 from decisionguard.experiments.baseline import (
+    BASELINE_MODELS,
     BaselineConfig,
     TemporalFold,
     evaluate_folds,
+    prediction_context,
 )
 from decisionguard.experiments.metrics import forecast_metrics
 from decisionguard.models.config import MMMConfig
@@ -87,7 +90,6 @@ def run_backtest(
         }
     output.mkdir(parents=True, exist_ok=False)
     membership.to_parquet(output / "partitions.parquet", index=False)
-    lock = Path(__file__).resolve().parents[3] / "uv.lock"
     write_json(
         output / "split.json",
         {
@@ -96,7 +98,7 @@ def run_backtest(
             "baseline_config": asdict(config),
             "mmm_config": asdict(mmm_config) if mmm_config else None,
             "code_hash": code_hash,
-            "dependency_lock_hash": file_hash(lock) if lock.exists() else None,
+            "dependency_lock_hash": dependency_lock_hash(),
             "partitions_hash": file_hash(output / "partitions.parquet"),
             "protocol": "expanding validation; fit train+validation; no test refit",
             "selection_metric": "validation MAE within each information context",
@@ -111,18 +113,8 @@ def run_backtest(
     scores: dict[str, list[tuple[float, str]]] = {}
     validation: dict[str, object] = {}
     frames: list[pd.DataFrame] = []
-    for model in (
-        "seasonal_naive",
-        "ets",
-        "ridge_raw",
-        "ridge_domain",
-        "hist_gradient_boosting",
-    ):
-        context = (
-            "forecast_from_origin"
-            if model in ("seasonal_naive", "ets")
-            else "conditional_on_realized_covariates"
-        )
+    for model in BASELINE_MODELS:
+        context = prediction_context(model)
         predictions, records = evaluate_folds(
             data.iloc[:development_end],
             replace(config, model=model),

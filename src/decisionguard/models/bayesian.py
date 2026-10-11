@@ -16,6 +16,7 @@ from pymc_marketing.prior import Prior
 
 from decisionguard.data.artifacts import (
     dataset_evidence,
+    dependency_lock_hash,
     file_hash,
     load_model_inputs,
     source_code_hash,
@@ -333,7 +334,6 @@ def train_mmm(
             for name in ("posterior.nc", "channel_draws.npz", "predictions.parquet")
         },
     }
-    lock = Path(__file__).resolve().parents[3] / "uv.lock"
-    record["dependency_lock_hash"] = file_hash(lock) if lock.exists() else None
+    record["dependency_lock_hash"] = dependency_lock_hash()
     write_json(output / "model.json", record)
     return record

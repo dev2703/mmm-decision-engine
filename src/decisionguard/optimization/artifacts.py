@@ -11,6 +11,7 @@ from sklearn.preprocessing import (  # pyright: ignore[reportMissingTypeStubs]
 )
 
 from decisionguard.data.artifacts import (
+    DEPENDENCY_LOCK,
     file_hash,
     load_model_inputs,
     source_code_hash,
@@ -122,7 +123,7 @@ def optimize_run(
             "seed": seed,
             "posterior_indices": selected,
             "code_hash": source_code_hash(),
-            "dependency_lock_hash": file_hash(Path("uv.lock")),
+            "dependency_lock_hash": file_hash(DEPENDENCY_LOCK),
         }
     )
     output.mkdir(parents=True, exist_ok=False)

@@ -4,7 +4,12 @@ from dataclasses import replace
 from pathlib import Path
 
 from decisionguard.data.artifacts import file_hash, write_json
-from decisionguard.experiments.baseline import BaselineConfig, run_baseline
+from decisionguard.experiments.baseline import (
+    BASELINE_MODELS,
+    BaselineConfig,
+    prediction_context,
+    run_baseline,
+)
 
 
 def run_comparison(
@@ -21,19 +26,9 @@ def run_comparison(
         "forecast_from_origin": [],
         "conditional_on_realized_covariates": [],
     }
-    for model in (
-        "seasonal_naive",
-        "ets",
-        "ridge_raw",
-        "ridge_domain",
-        "hist_gradient_boosting",
-    ):
+    for model in BASELINE_MODELS:
         result = run_baseline(dataset, output / model, replace(config, model=model))
-        context = (
-            "forecast_from_origin"
-            if model in ("seasonal_naive", "ets")
-            else "conditional_on_realized_covariates"
-        )
+        context = prediction_context(model)
         mae = result.cv_metrics["mae"]
         if mae is None:
             raise ValueError("CV MAE unavailable")

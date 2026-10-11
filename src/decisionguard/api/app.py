@@ -18,6 +18,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from starlette.responses import JSONResponse, Response
 
+from decisionguard.agent.contracts import AgentAnswer, AgentQuery, Provider
 from decisionguard.api.database import (
     Dataset,
     EvaluationRun,
@@ -40,6 +41,7 @@ from decisionguard.api.model_evidence import (
     channel_evidence,
     prediction_evidence,
 )
+from decisionguard.api.scenarios import ScenarioCreate
 from decisionguard.config import Settings, artifact_path
 
 
@@ -148,21 +150,6 @@ class ModelHealthView(BaseModel):
     evaluation: EvaluationRunView | None
 
 
-Money = Annotated[float, Field(strict=True, ge=0, allow_inf_nan=False)]
-
-
-class ScenarioCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    total: Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]
-    current: dict[str, Money]
-    floors: dict[str, Money] = Field(default_factory=dict)
-    caps: dict[str, Money] = Field(default_factory=dict)
-    max_movement: dict[str, Money] = Field(default_factory=dict)
-    protected_spend: dict[str, Money] = Field(default_factory=dict)
-    horizon_weeks: int = Field(default=13, strict=True, ge=1, le=52)
-    risk_policy: Literal["expected", "conservative"] = "conservative"
-
-
 class ScenarioView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
@@ -200,7 +187,9 @@ class OptimizationRunView(BaseModel):
     recommendation_allowed: bool = False
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, *, agent_provider: Provider | None = None
+) -> FastAPI:
     settings = settings or Settings.from_environment()
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     sessions = sessionmaker(engine, expire_on_commit=False)
@@ -640,6 +629,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status_code=201,
     )
     def create_scenario(model_run_id: UUID, body: ScenarioCreate) -> ScenarioView:
+        return ScenarioView.model_validate(
+            prepare_scenario(model_run_id, body, persist=True)
+        )
+
+    def prepare_scenario(
+        model_run_id: UUID, body: ScenarioCreate, *, persist: bool
+    ) -> Scenario:
         from decisionguard.api.evaluations import latest_evaluation, verified_evaluation
         from decisionguard.data.artifacts import source_code_hash
         from decisionguard.evaluation.policy import ReleaseDecision, ReleaseState
@@ -691,9 +687,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 risk_policy=body.risk_policy,
                 code_version=source_code_hash(),
             )
-            session.add(scenario)
-            session.flush()
-            return ScenarioView.model_validate(scenario)
+            if persist:
+                session.add(scenario)
+                session.flush()
+            return scenario
+
+    @app.post("/model-runs/{model_run_id}/constraints/validate")
+    def validate_constraints(
+        model_run_id: UUID, body: ScenarioCreate
+    ) -> dict[str, Any]:
+        scenario = prepare_scenario(model_run_id, body, persist=False)
+        return {
+            "valid": True,
+            "model_run_id": str(model_run_id),
+            "evaluation_run_id": str(scenario.evaluation_run_id),
+            "evaluation_record_hash": scenario.evaluation_record_hash,
+            "constraints": scenario.constraints,
+            "effective_bounds": scenario.effective_bounds,
+            "release": scenario.release,
+            "horizon_weeks": scenario.horizon_weeks,
+            "risk_policy": scenario.risk_policy,
+            "units": "AUD/week",
+            "recommendation_allowed": False,
+        }
 
     @app.get("/scenarios/{scenario_id}", response_model=ScenarioView)
     def get_scenario(scenario_id: UUID) -> ScenarioView:
@@ -793,5 +809,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     409, "Optimization evidence integrity check failed"
                 ) from error
             return view
+
+    @app.post("/agent/query", response_model=AgentAnswer)
+    def agent_query(body: AgentQuery, request: Request) -> AgentAnswer:
+        from decisionguard.agent.runtime import run_agent
+        from decisionguard.api.agent_tools import AgentTools
+        from decisionguard.data.artifacts import source_code_hash
+
+        get_project(body.project_id)
+        if agent_provider is None:
+            raise HTTPException(503, "Agent provider is not configured")
+        agent_tools = AgentTools(
+            query=body,
+            sessions=sessions,
+            root=root,
+            quality=get_quality,
+            health=model_health,
+            channel=get_channel_evidence,
+            validate=validate_constraints,
+            queue=lambda identifier: queue_optimization(
+                identifier, OptimizationCreate()
+            ),
+            optimization=get_optimization,
+        )
+        return run_agent(
+            body,
+            agent_provider,
+            schemas=agent_tools.schemas(),
+            execute=agent_tools.execute,
+            trace_root=root / "agent-traces",
+            code_hash=source_code_hash(),
+            request_id=UUID(request.state.correlation_id),
+        )
 
     return app
