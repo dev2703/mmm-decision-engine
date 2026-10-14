@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import dotenv_values
 from sqlalchemy.engine import make_url
 
 
@@ -23,6 +24,7 @@ class Settings:
     api_token: str | None = field(default=None, repr=False)
     read_only: bool = False
     environment: str = "local"
+    tensormux_api_key: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if make_url(self.database_url).drivername != "postgresql+psycopg":
@@ -39,16 +41,19 @@ class Settings:
 
     @classmethod
     def from_environment(cls) -> Settings:
-        database_url = os.environ.get("DATABASE_URL")
+        # Explicit project file only; exported variables always take precedence.
+        values = {**dotenv_values(".env"), **os.environ}
+        database_url = values.get("DATABASE_URL")
         if not database_url:
             raise ValueError("DATABASE_URL is required")
-        read_only = os.environ.get("READ_ONLY", "false").lower()
+        read_only = (values.get("READ_ONLY") or "false").lower()
         if read_only not in {"true", "false"}:
             raise ValueError("READ_ONLY must be true or false")
         return cls(
             database_url,
-            Path(os.environ.get("ARTIFACT_ROOT", "artifacts")),
-            api_token=os.environ.get("API_TOKEN") or None,
+            Path(values.get("ARTIFACT_ROOT") or "artifacts"),
+            api_token=values.get("API_TOKEN") or None,
             read_only=read_only == "true",
-            environment=os.environ.get("APP_ENV", "local"),
+            environment=values.get("APP_ENV") or "local",
+            tensormux_api_key=values.get("TENSORMUX_API_KEY") or None,
         )

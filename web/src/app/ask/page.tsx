@@ -54,8 +54,8 @@ function Conversation() {
       />
       {!agentEnabled && (
         <Notice title="Conversational exploration is not connected">
-          Claude integration is planned. You can inspect all model, validation
-          and scenario evidence directly in the workspace today.
+          Connect a chat provider to ask questions. You can inspect all model,
+          validation and scenario evidence directly in the workspace today.
         </Notice>
       )}
       <div className="ask-intro">
@@ -144,6 +144,13 @@ function Conversation() {
           title={response.message}
           action={<Badge value={response.status} />}
         >
+          {response.status === "error" && (
+            <p>
+              You can still inspect the evidence directly in{" "}
+              <Link href="/model-health">Model Health</Link> and{" "}
+              <Link href="/model-lab">Model Lab</Link>.
+            </p>
+          )}
           {response.evidence.map((item) => (
             <EvidenceDetails
               key={item.id}

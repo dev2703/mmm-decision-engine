@@ -18,7 +18,9 @@ from decisionguard.agent.contracts import (
     AnswerSelection,
     Provider,
     ProviderContext,
+    ProviderFailure,
     ProviderReply,
+    ToolCall,
     ToolResult,
     ToolTrace,
     Usage,
@@ -92,6 +94,7 @@ def run_agent(
     request_id: UUID | None = None,
     max_turns: int = 8,
     max_evidence_bytes: int = 64000,
+    max_duration_seconds: float = 60,
 ) -> AgentAnswer:
     """Bound all model-controlled work; persist redacted traces on every outcome."""
     started = perf_counter()
@@ -104,6 +107,7 @@ def run_agent(
         model=provider.model,
     )
     results: list[ToolResult] = []
+    calls: list[ToolCall] = []
     cache: dict[str, ToolResult] = {}
     # Verify audit storage before the first provider call or queued action.
     trace_root.mkdir(parents=True, exist_ok=True)
@@ -131,7 +135,19 @@ def run_agent(
             "unavailable": "The requested answer is unavailable from verified tools.",
             "denied": "Policy denied the requested action. Review the evidence below.",
             "error": "Exploration failed; no analytical answer was generated.",
-            "limit_reached": "Tool limit reached; exploration is incomplete.",
+            "limit_reached": "Exploration limit reached; the answer is incomplete.",
+        }
+        provider_messages = {
+            "authentication": (
+                "Chat provider rejected its credentials. Check the server API key."
+            ),
+            "quota": (
+                "Chat provider credit is unavailable. "
+                "Renew provider credit to use chat."
+            ),
+            "rate_limit": "Chat provider is rate limited. Try again shortly.",
+            "timeout": "Chat provider timed out. Try again shortly.",
+            "unavailable": "Chat provider is unavailable. Try again later.",
         }
         # Preserve receipts for any queued work even if the provider later fails.
         selected = list(selected)
@@ -146,13 +162,19 @@ def run_agent(
                 sources.add(item.evidence.source)
         return AgentAnswer(
             status=status,
-            message=messages[status],
+            message=(
+                provider_messages[trace.provider_error]
+                if trace.provider_error and status == "error"
+                else messages[status]
+            ),
             evidence=selected,
             issues=[item for item in results if item.status != "ok"],
             trace=trace,
         )
 
     for _ in range(max_turns):
+        if perf_counter() - started >= max_duration_seconds:
+            return finish("limit_reached", [])
         trace.provider_calls += 1
         persist()
         try:
@@ -162,6 +184,7 @@ def run_agent(
                     query=query.model_copy(deep=True),
                     tools=schemas,
                     results=[item.model_copy(deep=True) for item in results],
+                    calls=[item.model_copy(deep=True) for item in calls],
                 )
             )
             reply = ProviderReply.model_validate_json(
@@ -171,6 +194,10 @@ def run_agent(
             trace.usage = _sum_usage(
                 trace.usage, reply.usage, first=trace.provider_calls == 1
             )
+        except ProviderFailure as failure:
+            trace.provider_error = failure.code
+            trace.usage = Usage()
+            return finish("error", [])
         except Exception:
             # Transport errors can contain credentials or raw provider payloads.
             # Do not return/log them, or retry potentially costly requests blindly.
@@ -208,6 +235,7 @@ def run_agent(
         except Exception:
             return finish("error", [])
         results.append(result)
+        calls.append(turn.model_copy(deep=True))
         trace.tools.append(
             ToolTrace(
                 result_id=identifier,

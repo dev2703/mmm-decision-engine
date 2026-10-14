@@ -95,7 +95,7 @@ async function proxy(
         body,
         cache: "no-store",
         redirect: "error",
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(route === "agent/query" ? 90000 : 30000),
         headers: {
           "Content-Type": "application/json",
           ...(process.env.API_TOKEN

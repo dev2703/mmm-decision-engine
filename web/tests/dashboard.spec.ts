@@ -117,6 +117,53 @@ test("constraints require a fresh review after editing and on model switch", asy
   ).toHaveValue("");
 });
 
+test("chat provider credit failure preserves access to verified evidence", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.route("**/capabilities", (route) =>
+    route.fulfill({
+      json: { read_only: false, agent_enabled: true },
+    }),
+  );
+  let submitted: unknown;
+  await page.route("**/agent/query", async (route) => {
+    submitted = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        status: "error",
+        message:
+          "Chat provider credit is unavailable. Renew provider credit to use chat.",
+        evidence: [],
+        issues: [],
+        trace: {
+          model: "glm-4-7-flash",
+          provider_error: "quota",
+          tools: [],
+          usage: {},
+        },
+      },
+    });
+  });
+  await page.goto("/ask");
+  await page.getByLabel("Your question").fill("Why is this model restricted?");
+  await page.getByRole("button", { name: "Ask DecisionGuard" }).click();
+  await expect(
+    page.getByRole("heading", { name: /Chat provider credit is unavailable/ }),
+  ).toBeVisible();
+  expect(submitted).toEqual({
+    project_id: projectId,
+    message: `Why is this model restricted?\nSelected model run: ${modelId}`,
+  });
+  await page
+    .locator("main")
+    .getByRole("link", { name: "Model Health", exact: true })
+    .click();
+  await expect(
+    page.getByText("Budget recommendations are blocked"),
+  ).toBeVisible();
+});
+
 test("a late old-model response never replaces current evidence", async ({
   page,
 }) => {

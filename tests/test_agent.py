@@ -89,6 +89,23 @@ def test_only_tool_evidence_can_be_returned_and_trace_is_redacted(
     assert result.trace.usage.cost_usd == pytest.approx(0.003)
     assert provider.contexts[1].instructions == INSTRUCTIONS
     assert provider.contexts[1].results[0].id == "e1"
+    assert provider.contexts[1].calls == [first.turn]
+
+
+def test_elapsed_time_budget_stops_before_another_provider_call(tmp_path: Path) -> None:
+    provider = ScriptedProvider()
+    result = run_agent(
+        AgentQuery(project_id=uuid4(), message="Explain health"),
+        provider,
+        schemas=[],
+        execute=fixture_tool,
+        trace_root=tmp_path,
+        code_hash="unit",
+        max_duration_seconds=0,
+    )
+    assert result.status == "limit_reached"
+    assert result.trace.provider_calls == 0
+    assert not provider.contexts
 
 
 @pytest.mark.parametrize("final", [answer("invented"), answer("e1", "e1"), answer()])

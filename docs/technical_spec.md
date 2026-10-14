@@ -1210,7 +1210,43 @@ metrics and windows, not unregistered baseline experiments or an automatic winne
 Live tool-selection accuracy, language understanding, token cost and latency need
 evaluation against the eventual Claude model before deployment.
 
-#### Connecting Claude later
+#### TensorMux demo adapter (2026-10-15)
+
+Question: can the owner's existing GLM access enable conversational exploration
+for today's local demonstration without replacing the verified agent core?
+
+Decision: use the OpenAI-compatible SDK against the fixed TensorMux endpoint
+`https://api.tensormux.com/v1`, model `glm-4-7-flash`. The supplied provider example
+establishes that transport; a Z.ai credential check had rejected this key.
+Direct hand-written HTTP and waiting for the originally planned Claude integration
+were the alternatives. Reusing the existing provider protocol and mature SDK keeps
+the change small; this does not add free-form synthesis or a provider framework.
+
+`TENSORMUX_API_KEY` is read from the working directory's `.env`, with explicit
+environment variables taking precedence. It is excluded from settings repr,
+browser code and traces. Read-only mode does not instantiate the adapter.
+Each request reconstructs only its own executed assistant/tool turns; tool data
+stays outside privileged instructions. The model selects one native function at
+a time and finishes by selecting evidence IDs. The runtime still validates all
+tool parameters, project scope, citations and release authority. Parallel,
+truncated or malformed calls and unsupported prose fail closed.
+
+Calls use a 20-second SDK timeout, no automatic retries, at most 768 output tokens,
+and the existing eight-call limit. A 60-second elapsed-time check stops further
+turns; an in-flight transport/tool call may finish after that boundary. The web
+proxy permits 90 seconds for agent queries. Usage reports actual provider tokens
+when available; cost stays unknown. Safe error categories distinguish credentials,
+credit, rate limits, timeouts and availability without returning raw provider text.
+
+Live checks on 2026-10-15 reached TensorMux but returned HTTP 402
+`insufficient_quota`; the provider reported free credit expired on 2026-09-19.
+The local dashboard presentation remains usable independently. Chat is **not
+verified demo-ready** until credit is restored and live health, uncertainty,
+unsupported-statistic and blocked-action cases are checked. Revisit model/token
+limits if real function-call compatibility or latency requires it. Scripted SDK
+contract tests establish boundary behavior only.
+
+#### Connecting another provider later
 
 Implement `decisionguard.agent.contracts.Provider`: a `model` identifier and a
 synchronous `respond(ProviderContext) -> ProviderReply` method, then supply the
@@ -1229,7 +1265,8 @@ Provider turns have one of these shapes (inside `ProviderReply.turn`):
 ```
 
 The adapter reports actual input/output tokens and, when known, cost in `usage`;
-missing or incomplete accounting remains null. No model or price is hard-coded.
+missing or incomplete accounting remains null. The core has no provider or price
+assumptions; the TensorMux adapter pins the model requested by the owner.
 The core makes at most eight provider calls and accepts at most 64 KB per tool
 result. Unsupported tool names are denied, invalid arguments are rejected, and
 unknown evidence IDs or unverified final prose cannot become an answer. Failed
@@ -2425,7 +2462,8 @@ must never be presented as scientific results.
    `BACKEND_URL=https://…`, the matching `API_TOKEN`, `DASHBOARD_USERNAME` and a strong
    `DASHBOARD_PASSWORD` (at least 16 characters). Do not prefix secrets with
    `NEXT_PUBLIC_`. Preview and production both need access protection. Claude keys
-   and provider integration remain absent.
+   can be added later. TensorMux credentials, when used, belong only to the API
+   service's secret environment.
 6. Choose ingress deliberately. The proxy currently supplies the application
    bearer token, not a Google identity token. Keep Cloud Run IAM private until
    either service-to-service IAM authentication is added, or explicitly choose

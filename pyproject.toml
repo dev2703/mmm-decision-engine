@@ -24,6 +24,8 @@ dependencies = [
     "scipy>=1.15,<2",
     "statsmodels>=0.14.6,<0.15",
     "threadpoolctl>=3.6,<4",
+    "python-dotenv>=1,<2",
+    "openai>=2,<3",
 ]
 
 [project.scripts]

@@ -5,8 +5,6 @@ a budget recommendation, then propagate uncertainty into constrained decisions.
 
 The seven-page dashboard shows data quality, model fit, channel uncertainty,
 release reasoning, guarded scenarios and run history. The real reviewed demo is
-**BLOCK**: accurate predictions did not overcome placebo failure and refit
-divergences. Claude integration and public deployment are deferred.
 
 ## Run the dashboard
 
@@ -49,8 +47,6 @@ uv run decisionguard seed-demo \
 
 This registers intact artifacts in place and preserves their hashes, configuration,
 uncertainty and release state. Re-importing the same directories is rejected.
-Artifacts are intentionally untracked; a fresh clone uses seeded data and the
-[reproduction commands](docs/technical_spec.md#reproducing-the-reviewed-demo).
 
 ## How it works
 
@@ -92,8 +88,7 @@ required credentials are missing. Public demo defaults are read-only.
 
 The model assumes weekly AUD spend, constant weekly allocations, and conditional
 predictions using realized controls. Modeled contribution is not experimentally
-identified incremental profit. Full limitations and experiment evidence remain
-in the [technical spec](docs/technical_spec.md).
+identified incremental profit.
 
 ## Local setup
 
@@ -117,18 +112,7 @@ checks all seven pages against the running native API with imported real artifac
 Browser contract tests use explicitly isolated HTTP fixtures. Database tests
 require `DECISIONGUARD_TEST_DATABASE_URL` pointing to a database ending in `_test`.
 
-## Agent exploration (Phase 8)
-
-The provider-independent agent core exposes `POST /agent/query` with a project ID
-and message. Claude integration is deferred: the default app returns HTTP 503
-until a provider is supplied to `create_app(agent_provider=...)`. No provider SDK
-or API key is needed for local tests.
-
-The seven tools inspect quality, models, health, channel evidence, constraints,
-scenarios and decision stability. Answers contain cited tool evidence; generated
-prose and invented metrics cannot become an answer. Queuing an existing scenario
-requires the caller's `authorized_scenario_id`; the CLI executes the job. No tool
-changes live spending. See the [adapter contract and design](docs/technical_spec.md#phase-8-design-decision-bounded-provider-independent-exploration).
+## Agent exploration
 
 Run the scripted safety tests and PostgreSQL integration tests:
 
@@ -138,5 +122,3 @@ uv run pytest tests/test_agent.py
 DECISIONGUARD_TEST_DATABASE_URL='postgresql+psycopg:///decisionguard_test' \
   uv run pytest tests/test_agent_api.py
 ```
-
-These verify deterministic boundaries, not the quality of a live Claude model.

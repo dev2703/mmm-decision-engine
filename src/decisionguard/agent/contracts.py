@@ -44,6 +44,19 @@ class ProviderReply(StrictModel):
     usage: Usage = Field(default_factory=Usage)
 
 
+ProviderErrorCode = Literal[
+    "authentication", "quota", "rate_limit", "timeout", "unavailable"
+]
+
+
+class ProviderFailure(Exception):
+    """Only a safe category crosses the transport boundary, never its raw error."""
+
+    def __init__(self, code: ProviderErrorCode) -> None:
+        self.code: ProviderErrorCode = code
+        super().__init__(code)
+
+
 ToolName = Literal[
     "get_data_quality",
     "compare_models",
@@ -78,10 +91,11 @@ class ProviderContext(StrictModel):
     query: AgentQuery
     tools: list[dict[str, Any]]
     results: list[ToolResult]
+    calls: list[ToolCall] = Field(default_factory=list[ToolCall])
 
 
 class Provider(Protocol):
-    """A future Claude adapter owns transport, timeout and actual usage reporting.
+    """A provider adapter owns transport, timeout and actual usage reporting.
 
     Keep instructions in the privileged system role; query in the user role;
     results in untrusted tool-result blocks. Never concatenate business text into
@@ -118,6 +132,7 @@ class AgentTrace(StrictModel):
     latency_ms: float = 0
     usage: Usage = Field(default_factory=Usage)
     outcome: str = "unavailable"
+    provider_error: ProviderErrorCode | None = None
 
 
 class AgentAnswer(StrictModel):

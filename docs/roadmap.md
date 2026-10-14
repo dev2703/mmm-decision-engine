@@ -682,7 +682,8 @@ is kept separate from scientific release authority.
 Project/dataset discovery, shared verified model comparison and detailed evaluation
 metrics now support the dashboard. Production access controls, a read-only mode and
 readiness probes support deployment preparation. Phase 8's provider-independent
-agent core is implemented; live provider integration remains deferred.
+agent core is implemented; TensorMux transport is added, with live evaluation
+blocked by provider credit availability.
 
 Objective
 
@@ -746,16 +747,18 @@ Everything required by frontend exists behind stable API behaviour.
 
 Phase 8 — Agent
 
-Status: provider-independent core implemented; Claude API integration deferred by
-the project owner. Seven typed, project-scoped tools reuse verified backend
+Status: provider-independent core and TensorMux GLM adapter implemented; Claude
+API integration remains deferred. Seven typed, project-scoped tools reuse verified backend
 evidence, read-only constraint validation and registered optimization queues.
 The bounded runtime returns cited tool records, preserves policy/uncertainty,
 records redacted traces and exposes deterministic evaluation metrics. Scripted
 adversarial tests cover the five cases below plus schema errors, foreign IDs,
 changed/stale evidence, failures, duplicate writes and execution limits.
-No live LLM behavior, latency, token usage or cost has been measured. The default
-query endpoint returns 503 until a provider is supplied; live language-model
-evaluation and fluent synthesis are not claimed complete.
+The optional `TENSORMUX_API_KEY` enables `glm-4-7-flash` at TensorMux's endpoint.
+On 2026-10-15, live requests returned 402 `insufficient_quota` (expired free credit).
+SDK contract tests do not substitute for live model evaluation. Successful live
+tool selection, latency, token usage and fluent synthesis are not claimed complete.
+Without a configured provider the query endpoint returns 503.
 
 Objective
 
@@ -865,7 +868,8 @@ Status: implemented. Seven responsive Next.js/TypeScript views use real backend
 evidence and ECharts. Models, quality findings, predictions, posterior intervals,
 release reasons and job history remain inspectable. Decision Lab validates actual
 constraints before creating/queuing scenarios; BLOCK and missing evidence disable
-execution. Ask DecisionGuard explicitly awaits the deferred Claude integration.
+execution. Ask DecisionGuard uses the optional TensorMux provider and exposes
+provider failures while retaining direct links to model evidence.
 Browser checks cover stale responses, model switching, constraint review, backend
 failures, proxy access and all seven pages against real artifacts on desktop/mobile.
 

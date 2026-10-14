@@ -1,6 +1,7 @@
 # Keep research plans locally.
 *PLAN.md
 *plan.md
+*agents.md*
 
 # Local credentials and private configuration.
 .env

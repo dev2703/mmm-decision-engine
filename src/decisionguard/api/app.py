@@ -193,14 +193,24 @@ def create_app(
     settings: Settings | None = None, *, agent_provider: Provider | None = None
 ) -> FastAPI:
     settings = settings or Settings.from_environment()
+    configured_provider = None
+    if agent_provider is None and settings.tensormux_api_key and not settings.read_only:
+        from decisionguard.agent.glm import GLMProvider
+
+        configured_provider = GLMProvider(settings.tensormux_api_key)
+        agent_provider = configured_provider
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     sessions = sessionmaker(engine, expire_on_commit=False)
     root = settings.artifact_root
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
-        yield
-        engine.dispose()
+        try:
+            yield
+        finally:
+            engine.dispose()
+            if configured_provider is not None:
+                configured_provider.close()
 
     app = FastAPI(title="mmm-decision-engine", lifespan=lifespan)
 
