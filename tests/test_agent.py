@@ -137,6 +137,25 @@ def test_fabricated_duplicate_and_missing_citations_are_unavailable(
 def test_provider_failures_and_unverified_prose_fail_closed(
     tmp_path: Path, failure: ProviderReply | Exception
 ) -> None:
+    def collect_strings(value: Any) -> list[str]:
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, dict):
+            return [item for nested in value.values() for item in collect_strings(nested)]
+        if isinstance(value, list):
+            return [item for nested in value for item in collect_strings(nested)]
+        return []
+
+    def provider_text(value: ProviderReply | Exception) -> list[str]:
+        if isinstance(value, Exception):
+            message = str(value).strip()
+            return [message] if message else []
+        if isinstance(value.turn, dict):
+            message = value.turn.get("message")
+            if isinstance(message, str) and message:
+                return [message]
+        return []
+
     result = run_agent(
         AgentQuery(project_id=uuid4(), message="Explain"),
         ScriptedProvider(failure),
@@ -147,10 +166,20 @@ def test_provider_failures_and_unverified_prose_fail_closed(
     )
     assert result.status == "error"
     assert result.trace.valid_provider_replies == 0
-    assert "sensitive" not in result.model_dump_json()
-    assert "9999" not in result.message
     assert not result.evidence
-    assert len(list(tmp_path.glob("*.json"))) == 1
+    trace_payload = json.loads((tmp_path / f"{result.trace.request_id}.json").read_text())
+    assert trace_payload["valid_provider_replies"] == 0
+    exposed = collect_strings(
+        {
+            "status": result.status,
+            "message": result.message,
+            "issues": [item.model_dump(mode="json") for item in result.issues],
+            "evidence": [item.model_dump(mode="json") for item in result.evidence],
+            "trace": trace_payload,
+        }
+    )
+    for leaked in provider_text(failure):
+        assert all(leaked not in value for value in exposed)
 
 
 def test_iteration_and_evidence_bounds(tmp_path: Path) -> None:
