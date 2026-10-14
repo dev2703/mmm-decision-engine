@@ -148,7 +148,8 @@ def test_provider_failures_and_unverified_prose_fail_closed(
     assert result.status == "error"
     assert result.trace.valid_provider_replies == 0
     assert "sensitive" not in result.model_dump_json()
-    assert "9999" not in result.model_dump_json()
+    assert "9999" not in result.message
+    assert not result.evidence
     assert len(list(tmp_path.glob("*.json"))) == 1
 
 

@@ -4,9 +4,23 @@ Marketing mix model decision support: evaluate whether model evidence justifies
 a budget recommendation, then propagate uncertainty into constrained decisions.
 
 The seven-page dashboard shows data quality, model fit, channel uncertainty,
-release reasoning, guarded scenarios and run history. The real reviewed demo is
+release reasoning, guarded scenarios and run history.
 
 ## Run the dashboard
+
+The easiest local presentation command is:
+
+```sh
+make demo-build
+```
+
+It builds the frontend, starts the API against the existing
+`decisionguard_demo` PostgreSQL database, and serves the dashboard at
+<http://127.0.0.1:3000>. Press **Ctrl-C** to stop both servers. Run
+`make demo-check` from another terminal to verify that both services are up.
+Use `make demo` for a faster development server; use `make demo-stop` if you
+need to stop a process left from an earlier run. These targets do not retrain,
+reimport, or delete artifacts.
 
 With Docker running and Node 22+ installed:
 
@@ -30,9 +44,10 @@ uv run decisionguard seed-demo
 uv run uvicorn decisionguard.api.app:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
-In a second terminal: `cd web && npm ci && npm run dev`. Environment examples are
-in [.env.example](.env.example) and [web/.env.example](web/.env.example); native
-Python commands read exported environment variables, not `.env` automatically.
+In a second terminal: `cd web && npm ci && npm run dev`. For a presentation, use
+`npm run build && npm run start -- --hostname 127.0.0.1` instead of `npm run dev`.
+Frontend settings are in [web/.env.example](web/.env.example). Native Python
+commands read `.env` in the working directory; exported variables take precedence.
 
 To show the existing **real precomputed runs**, use this **instead of** the
 data-only `seed-demo` command above (the artifact directories must exist):
@@ -114,10 +129,15 @@ require `DECISIONGUARD_TEST_DATABASE_URL` pointing to a database ending in `_tes
 
 ## Agent exploration
 
+Set `TENSORMUX_API_KEY` in the root `.env` and restart the API to enable the
+`glm-4-7-flash` adapter. Provider credit must be active. The key stays on the
+server; missing credit produces an explicit error while direct evidence views
+remain available. See the [adapter and live-check status](docs/technical_spec.md#tensormux-demo-adapter-2026-10-15).
+
 Run the scripted safety tests and PostgreSQL integration tests:
 
 ```sh
-uv run pytest tests/test_agent.py
+uv run pytest tests/test_agent.py tests/test_glm.py
 # Use an existing dedicated PostgreSQL database whose name ends in _test.
 DECISIONGUARD_TEST_DATABASE_URL='postgresql+psycopg:///decisionguard_test' \
   uv run pytest tests/test_agent_api.py

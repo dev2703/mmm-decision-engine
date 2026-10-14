@@ -1246,6 +1246,31 @@ unsupported-statistic and blocked-action cases are checked. Revisit model/token
 limits if real function-call compatibility or latency requires it. Scripted SDK
 contract tests establish boundary behavior only.
 
+Final adapter/demo review, 2026-10-15:
+
+- Summary: TensorMux is wired into the existing bounded runtime. The native
+  dashboard is served from its production build with the real imported artifacts.
+- Blockers: expired provider credit prevents successful live chat evaluation.
+  This does not prevent the local evidence/guardrail walkthrough. The actual
+  model remains BLOCK; no approved allocation is presented.
+- Major issues: none found in the implemented transport, configuration or gate
+  boundaries. Live GLM tool-selection quality is still unknown.
+- Minor issues: the SDK contract test initially searched timing metadata for a
+  hallucinated numeric string. Its assertion now checks answer content and empty
+  evidence, removing a false failure caused by elapsed-time digits.
+- What is good: existing policy checks remain authoritative; independent request
+  histories, server-only credentials and redacted failure categories preserve
+  the trust boundary. Scientific model methodology and thresholds are unchanged.
+- Simplification opportunities: the adapter reuses the existing seven tools and
+  runtime without adding routing infrastructure or database migrations.
+- Verification: **339 Python tests passed, 1 skipped** against the dedicated test
+  database; **9 browser tests passed**, including all seven real-data pages at
+  desktop/mobile sizes. Production build, TypeScript, Prettier, Pyright and Ruff
+  passed. A live request through the frontend proxy returned the expected quota
+  error, one provider call and zero tool executions. Successful live health,
+  uncertainty, unavailable-statistic and blocked-action cases remain required
+  after provider credit is restored; cloud deployment remains deferred.
+
 #### Connecting another provider later
 
 Implement `decisionguard.agent.contracts.Provider`: a `model` identifier and a

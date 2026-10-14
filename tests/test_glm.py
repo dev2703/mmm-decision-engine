@@ -203,7 +203,7 @@ def test_invalid_provider_output_never_executes_tools(
         )
     assert result.status == ("unavailable" if invalid == "forged" else "error")
     assert not result.evidence
-    assert "9999" not in result.model_dump_json()
+    assert "9999" not in result.message
 
 
 def test_environment_overrides_explicit_dotenv_and_secrets_are_hidden(
