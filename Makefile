@@ -28,6 +28,10 @@ demo:
 # Build and serve the stable production frontend for presentations.
 demo-build:
 	cd web && npm run build
+	@if curl --fail --silent 'http://$(WEB_HOST):$(WEB_PORT)/' >/dev/null && curl --fail --silent 'http://$(API_HOST):$(API_PORT)/ready' >/dev/null; then \
+		printf '\nAn active demo is already serving http://%s:%s\nRun make demo-stop first if you want to replace it.\n\n' '$(WEB_HOST)' '$(WEB_PORT)'; \
+	exit 0; \
+	fi; \
 	@set -eu; \
 	trap 'kill $$api_pid $$web_pid 2>/dev/null || true' EXIT INT TERM; \
 	DATABASE_URL='$(DATABASE_URL)' .venv/bin/uvicorn decisionguard.api.app:create_app --factory --host '$(API_HOST)' --port '$(API_PORT)' & \
