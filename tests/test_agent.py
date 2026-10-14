@@ -146,6 +146,16 @@ def test_provider_failures_and_unverified_prose_fail_closed(
             return [item for nested in value for item in collect_strings(nested)]
         return []
 
+    def provider_text(value: ProviderReply | Exception) -> list[str]:
+        if isinstance(value, Exception):
+            message = str(value).strip()
+            return [message] if message else []
+        if isinstance(value.turn, dict):
+            message = value.turn.get("message")
+            if isinstance(message, str) and message:
+                return [message]
+        return []
+
     result = run_agent(
         AgentQuery(project_id=uuid4(), message="Explain"),
         ScriptedProvider(failure),
@@ -168,8 +178,8 @@ def test_provider_failures_and_unverified_prose_fail_closed(
             "trace": trace_payload,
         }
     )
-    assert all("sensitive API key" not in value for value in exposed)
-    assert all("Meta ROI is 9999" not in value for value in exposed)
+    for leaked in provider_text(failure):
+        assert all(leaked not in value for value in exposed)
 
 
 def test_iteration_and_evidence_bounds(tmp_path: Path) -> None:
