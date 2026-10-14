@@ -176,7 +176,12 @@ def test_artifact_path_rejects_escape_and_symlink(tmp_path: Path) -> None:
     assert artifact_path(root, "projects/data") == root / "projects/data"
 
 
-def queued_experiment(client: TestClient, *, weeks: int = 78) -> tuple[str, str, str]:
+def queued_experiment(
+    client: TestClient,
+    *,
+    weeks: int = 78,
+    channels: tuple[str, ...] = ("search_spend",),
+) -> tuple[str, str, str]:
     project_id = client.post("/projects", json={"name": "MMM experiment"}).json()["id"]
     dataset = client.post(
         f"/projects/{project_id}/datasets/generate", json={"weeks": weeks}
@@ -189,7 +194,7 @@ def queued_experiment(client: TestClient, *, weeks: int = 78) -> tuple[str, str,
                 "draws": 8,
                 "tune": 16,
                 "chains": 1,
-                "channels": ["search_spend"],
+                "channels": list(channels),
             },
         },
     )
@@ -248,7 +253,9 @@ def test_real_registered_training_publishes_checked_candidate(
     from decisionguard.api.jobs import train_experiment
 
     with TestClient(create_app(database)) as client:
-        project_id, experiment_id, run_id = queued_experiment(client)
+        project_id, experiment_id, run_id = queued_experiment(
+            client, channels=MMMConfig().channels
+        )
         result = train_experiment(UUID(experiment_id), database)
         assert result["diagnostics"]["diagnostic_status"] == "INCOMPLETE"
         stored = client.get(f"/model-runs/{run_id}").json()

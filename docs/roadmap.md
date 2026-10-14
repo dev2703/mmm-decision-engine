@@ -657,7 +657,7 @@ model uncertainty changes what the optimizer is allowed to recommend.
 
 Phase 7 — FastAPI + PostgreSQL
 
-Status: in progress. Project/dataset and experiment/model-run tables have real
+Status: implemented for the current dashboard and agent contracts. Project/dataset and experiment/model-run tables have real
 PostgreSQL migrations and HTTP contracts. Quality evidence is checksum-verified;
 registered heavy training executes through the CLI with transactional job claims.
 Executed PostgreSQL tests include migration round trips, ORM/schema consistency,
@@ -679,9 +679,10 @@ units and registered provenance. Reading a blocked model never authorizes a deci
 Project run history now combines training, evaluation and optimization job metadata
 with bounded pagination, filters and preserved upstream identities. Job completion
 is kept separate from scientific release authority.
-Phase 7 remains open for frontend-facing model comparison and remaining detailed
-evidence views. Phase 8's provider-independent agent core is now implemented;
-live provider integration and UI work remain deferred.
+Project/dataset discovery, shared verified model comparison and detailed evaluation
+metrics now support the dashboard. Production access controls, a read-only mode and
+readiness probes support deployment preparation. Phase 8's provider-independent
+agent core is implemented; live provider integration remains deferred.
 
 Objective
 
@@ -860,6 +861,14 @@ The agent improves accessibility without owning the underlying analytical truth.
 
 Phase 9 — Dashboard
 
+Status: implemented. Seven responsive Next.js/TypeScript views use real backend
+evidence and ECharts. Models, quality findings, predictions, posterior intervals,
+release reasons and job history remain inspectable. Decision Lab validates actual
+constraints before creating/queuing scenarios; BLOCK and missing evidence disable
+execution. Ask DecisionGuard explicitly awaits the deferred Claude integration.
+Browser checks cover stale responses, model switching, constraint review, backend
+failures, proxy access and all seven pages against real artifacts on desktop/mobile.
+
 Objective
 
 Produce a polished interview-quality application.
@@ -915,6 +924,14 @@ CTO/ML engineer:
 can inspect evidence.
 
 Phase 10 — Deployment + Interview Polish
+
+Status: local preparation implemented; cloud connections and deployment deferred
+by the owner. Includes Docker/Compose, environment examples, Cloud Run service/job
+templates, Vercel instructions, architecture, threat model, genuine demo registration
+and reproduction commands. Native backend/frontend and the real PostgreSQL demo
+were verified locally. Docker Compose configuration validates; image builds and
+cloud storage/job behavior await a running Docker daemon and connected accounts.
+No public deployment URL exists yet.
 
 Deployment
 

@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import date, datetime
+from hmac import compare_digest
 from time import perf_counter
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
@@ -14,7 +15,8 @@ from zipfile import BadZipFile
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from starlette.responses import JSONResponse, Response
 
@@ -222,7 +224,26 @@ def create_app(
         # Generate our own IDs: untrusted headers cannot inject logs or traces.
         request.state.correlation_id = str(uuid4())
         started = perf_counter()
-        response: Response = await call_next(request)
+        response: Response | None = None
+        if request.url.path not in {"/health", "/ready"}:
+            if settings.api_token and not compare_digest(
+                request.headers.get("authorization", "").encode(),
+                ("Bearer " + settings.api_token).encode(),
+            ):
+                response = JSONResponse(
+                    {"detail": "Authentication required"}, status_code=401
+                )
+            elif settings.read_only and request.method not in {
+                "GET",
+                "HEAD",
+                "OPTIONS",
+            }:
+                response = JSONResponse(
+                    {"detail": "This workspace is read-only"}, status_code=403
+                )
+        if response is None:
+            response = await call_next(request)
+        assert response is not None
         response.headers["X-Correlation-ID"] = request.state.correlation_id
         route = request.scope.get("route")
         logging.getLogger("decisionguard.api").info(
@@ -242,6 +263,38 @@ def create_app(
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/ready")
+    def ready() -> dict[str, str]:
+        try:
+            with sessions() as session:
+                session.execute(text("SELECT 1"))
+            if not root.is_dir():
+                raise HTTPException(503, "Artifact storage unavailable")
+        except SQLAlchemyError as error:
+            raise HTTPException(503, "Database unavailable") from error
+        return {"status": "ready"}
+
+    @app.get("/capabilities")
+    def capabilities() -> dict[str, bool]:
+        return {
+            "agent_enabled": agent_provider is not None and not settings.read_only,
+            "read_only": settings.read_only,
+        }
+
+    @app.get("/projects", response_model=list[ProjectView])
+    def list_projects(
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    ) -> list[ProjectView]:
+        with sessions() as session:
+            projects = session.scalars(
+                select(Project)
+                .order_by(Project.created_at.desc(), Project.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            return [ProjectView.model_validate(item) for item in projects]
+
     @app.post("/projects", response_model=ProjectView, status_code=201)
     def create_project(body: ProjectCreate) -> ProjectView:
         with sessions.begin() as session:
@@ -257,6 +310,80 @@ def create_app(
             if project is None:
                 raise HTTPException(404, "Project not found")
             return ProjectView.model_validate(project)
+
+    @app.get("/projects/{project_id}/datasets", response_model=list[DatasetView])
+    def list_datasets(
+        project_id: UUID,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    ) -> list[DatasetView]:
+        get_project(project_id)
+        with sessions() as session:
+            rows = session.scalars(
+                select(Dataset)
+                .where(Dataset.project_id == project_id)
+                .order_by(Dataset.version.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            return [DatasetView.model_validate(row) for row in rows]
+
+    @app.get("/projects/{project_id}/model-comparison")
+    def compare_models(
+        project_id: UUID,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=20)] = 20,
+    ) -> dict[str, Any]:
+        from decisionguard.api.comparison import model_comparison
+
+        get_project(project_id)
+        try:
+            return model_comparison(
+                sessions, root, project_id, offset=offset, limit=limit
+            )
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            raise HTTPException(
+                409, "Intact model comparison evidence required"
+            ) from error
+
+    @app.get("/evaluation-runs/{evaluation_id}/evidence")
+    def get_evaluation_evidence(evaluation_id: UUID) -> dict[str, Any]:
+        import pandas as pd
+
+        from decisionguard.api.evaluations import verified_evaluation
+        from decisionguard.evaluation.artifacts import source_evidence
+
+        with sessions() as session:
+            evaluation = session.get(EvaluationRun, evaluation_id)
+            if evaluation is None:
+                raise HTTPException(404, "Evaluation not found")
+            if evaluation.status != "SUCCEEDED":
+                raise HTTPException(409, "Evaluation is not complete")
+            model = session.get(ModelRun, evaluation.model_run_id)
+            alternative = session.get(ModelRun, evaluation.sensitivity_run_id)
+            try:
+                if model is None or alternative is None:
+                    raise ValueError("Evaluation inputs missing")
+                policy, record = verified_evaluation(
+                    evaluation, model, alternative, root
+                )
+                path = artifact_path(root, evaluation.artifact_uri)
+                raw = pd.read_parquet(path / "mmm_eval_raw.parquet")
+                return {
+                    "evaluation_run_id": str(evaluation.id),
+                    "model_run_id": str(model.id),
+                    "record_hash": evaluation.record_hash,
+                    "policy": policy,
+                    "metrics": [
+                        asdict(row)
+                        for row in source_evidence(raw, record["config"]["channels"])
+                    ],
+                    "decision_use": "historical_evidence; check current model health",
+                }
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                raise HTTPException(
+                    409, "Intact evaluation evidence required"
+                ) from error
 
     @app.post(
         "/projects/{project_id}/datasets/generate",

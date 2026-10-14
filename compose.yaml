@@ -1,0 +1,49 @@
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: decisionguard
+      POSTGRES_PASSWORD: local-development-only
+      POSTGRES_DB: decisionguard
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U decisionguard -d decisionguard"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  api:
+    build:
+      context: .
+      target: api
+    environment:
+      DATABASE_URL: postgresql+psycopg://decisionguard:local-development-only@db/decisionguard
+      ARTIFACT_ROOT: /artifacts
+      APP_ENV: local
+    command:
+      [
+        sh,
+        -c,
+        "alembic upgrade head && exec uvicorn decisionguard.api.app:create_app --factory --host 0.0.0.0 --port 8080",
+      ]
+    ports:
+      - "127.0.0.1:8000:8080"
+    volumes:
+      - artifacts:/artifacts
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          CMD,
+          python,
+          -c,
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/ready', timeout=3)",
+        ]
+      interval: 5s
+      timeout: 4s
+      retries: 30
+volumes:
+  database:
+  artifacts:

@@ -193,6 +193,41 @@ by itself.
 
 9. Frontend
 
+### Phase 9–10 implementation decision
+
+Build the seven dashboard views in the specified Next.js/React/TypeScript stack,
+using ECharts alone for charts. Reuse the existing FastAPI evidence and job APIs;
+add project/dataset discovery, shared verified model comparison and detailed
+evaluation/optimization views where the UI needs them. The browser displays server
+metrics, intervals, units, source IDs and current release state. It does not fit
+models, compute production statistics, promote candidates or invent demo outcomes.
+
+Use a same-origin Next.js proxy to a fixed server-configured backend, with a bounded
+route allowlist and timeouts. Backend credentials stay server-side. A deployment
+must protect both the dashboard and backend; local development remains simple.
+Missing data, loading, failed evidence checks, BLOCK and the deferred agent have
+explicit UI states. Unknown values are missing, not zero. No model is selected as
+best across different datasets/windows. Stored job success never means release PASS.
+
+Alternatives were a buildless client (less tooling but contrary to the agreed
+frontend stack) and a separate BI framework (more duplicated state and deployment
+complexity). A single Next.js app with a small shared workspace context fits the
+seven related views. Revisit state-management libraries only if request/state
+complexity grows beyond this workflow.
+
+Deployment work includes a backend image, Compose setup, seeded real-data demo,
+cloud configuration/runbook, architecture and threat model. Actual cloud deployment
+depends on the owner's target projects and access. Existing real precomputed models
+may be registered only after verifying their immutable artifacts; their observed
+BLOCK remains visible. Default demo setup never fabricates successful evaluations.
+Docker/cloud/browser checks must be reported separately from static checks.
+
+Acceptance: all seven routes work on desktop and mobile; real APIs drive charts;
+project/model changes clear old evidence; blocked or stale inputs cannot queue a
+recommendation; scenarios are validated by the server; agent unavailability is
+honest; job history is navigable; backend secrets are absent from client assets;
+setup and demo are reproducible; browser and API contract tests execute.
+
 Use:
 
 Next.js
@@ -2293,3 +2328,172 @@ Final change review (Phases 0–5):
   runtime checks passed, and Ruff formatting/lint plus strict Pyright passed. The
   decoded-artifact regression was rechecked after its final fixture correction.
   Phase 0 GitHub/pre-commit automation remains deferred by the owner.
+
+## Phase 10 local deployment preparation
+
+The owner requested local preparation and will connect accounts later. No cloud
+resources were created. The native app uses PostgreSQL and actual saved artifacts;
+Compose and Cloud Run configuration are reviewable deployment inputs, not evidence
+of a successful container/cloud deployment.
+
+### Local operation and reproducibility
+
+`make dev` starts PostgreSQL and FastAPI with Compose, waits for readiness, installs
+the locked frontend packages and starts Next.js on port 3000. The API binds to
+loopback port 8000; PostgreSQL is reachable only on the Compose network. Named
+volumes persist metadata/artifacts. Native development is documented in README.
+Use Node 22+ and Python 3.12. `make stop` preserves volumes. Do not delete them to
+resolve ordinary application errors.
+
+Create a sample workspace through the UI or run `decisionguard seed-demo` once
+with exported `DATABASE_URL` and `ARTIFACT_ROOT`. Seed 42 produces 156 synthetic
+weekly observations, deliberate data defects and an audited clean candidate. It
+creates no model or passing release. To display precomputed evidence, provide all
+four directories to `seed-demo --dataset ... --model ... --sensitivity ...
+--evaluation ...`. Paths must be within the artifact root. Registration verifies
+dataset, posterior, prediction, sensitivity and evaluation identities through the
+same loaders as the API. Existing files are never rewritten. A transaction binds
+the records; unique artifact paths prevent duplicate registrations. Imported job
+creation dates represent registration, and unknown execution timestamps stay null.
+
+Copy the entire artifact tree when moving a demo, preserving relative paths and
+bytes. Register it against the destination database/root. Recorded source paths
+remain provenance; registered training/evaluation/optimization supply the actual
+registered dataset and sensitivity paths. Never edit model/evaluation JSON to
+relocate evidence or change a scientific release.
+
+### Reproducing the reviewed demo
+
+The existing reviewed runs used the following scientific settings. Generate new
+output directories; never overwrite prior runs. Sampling and upstream evaluation
+are substantial offline jobs, not a browser interaction:
+
+```sh
+uv run decisionguard prepare-data --weeks 156 --seed 42 --output artifacts/demo-data
+uv run decisionguard compare --dataset artifacts/demo-data --output artifacts/demo-baselines
+uv run decisionguard train --dataset artifacts/demo-data --output artifacts/demo-model \
+  --draws 2000 --tune 1500 --chains 4 --seed 42 --holdout 13 \
+  --adstock-lags 16 --target-accept 0.99 --max-tree-depth 12 \
+  --media-prior-mean 0.15 --media-prior-sigma 0.1
+uv run decisionguard train --dataset artifacts/demo-data --output artifacts/demo-prior \
+  --draws 2000 --tune 1500 --chains 4 --seed 42 --holdout 13 \
+  --adstock-lags 16 --target-accept 0.99 --max-tree-depth 12 \
+  --media-prior-mean 0.25 --media-prior-sigma 0.15
+UV_PROJECT_ENVIRONMENT=.venv-evaluation uv run --locked --no-default-groups --group evaluation \
+  decisionguard evaluate --model-run artifacts/demo-model \
+  --sensitivity-run artifacts/demo-prior --output artifacts/demo-evaluation \
+  --draws 2000 --tune 1500
+uv run decisionguard seed-demo --dataset artifacts/demo-data --model artifacts/demo-model \
+  --sensitivity artifacts/demo-prior --evaluation artifacts/demo-evaluation
+```
+
+Use the retained source/lock identity for exact historical reproduction. Re-running
+on newer code, platforms or numerical libraries records new hashes and may alter
+samples or checks. The existing production evaluation ran 20 refits and returned
+BLOCK for placebo and sampler failures. Do not lower policy thresholds to create
+an appealing demo. Smaller development draws are useful for software checks but
+do not establish adequate scientific evidence.
+
+Interview walkthrough: inspect the quality warnings; compare holdout fit and
+posterior channel intervals; follow Model Health to the blocking evaluation;
+show that Decision Lab cannot queue from BLOCK; inspect the run provenance. The
+unavailable Claude page states its actual connection status. A decision outcome
+can be demonstrated with a separately permitted real model; contract-test fixtures
+must never be presented as scientific results.
+
+### Cloud handoff runbook
+
+1. Build the API image with `docker build --target api -t decisionguard-api .`.
+   Heavy upstream evaluation uses `--target evaluation`. The images install from
+   `uv.lock`, run as a non-root user, and keep the API separate from the optional
+   TensorFlow evaluator. Tag and push an immutable image digest after account setup.
+2. Provision managed PostgreSQL, a private artifact bucket and separate service
+   accounts for reads and jobs. Grant only the relevant bucket, Cloud SQL client
+   and named-secret access. Put the encoded PostgreSQL connection URL and a random
+   API token (at least 32 characters) into Secret Manager; use explicit versions.
+   The Cloud SQL URL uses `postgresql+psycopg` and the attached instance socket,
+   e.g. `postgresql+psycopg://USER:ENCODED_PASSWORD@/DB?host=/cloudsql/PROJECT:REGION:INSTANCE`.
+3. Fill the placeholders in `deploy/cloud-run-job.yaml`. Run its default migration
+   command once before starting the service. Import trusted artifacts and run the
+   demo registration job once. Do not run schema migrations on every service start.
+4. Fill `deploy/cloud-run-service.yaml`. The prepared service has a read-only
+   bucket mount and `READ_ONLY=true`; `/ready` checks database/storage access and
+   `/health` supplies a minimal liveness response. Start with low concurrency and
+   bounded instance counts because evidence verification reads/hashes artifacts.
+5. Configure Vercel with repository root directory `web`, framework Next.js, install
+   `npm ci`, build `npm run build`, and Node 22+. Set server-only `APP_ENV=production`,
+   `BACKEND_URL=https://…`, the matching `API_TOKEN`, `DASHBOARD_USERNAME` and a strong
+   `DASHBOARD_PASSWORD` (at least 16 characters). Do not prefix secrets with
+   `NEXT_PUBLIC_`. Preview and production both need access protection. Claude keys
+   and provider integration remain absent.
+6. Choose ingress deliberately. The proxy currently supplies the application
+   bearer token, not a Google identity token. Keep Cloud Run IAM private until
+   either service-to-service IAM authentication is added, or explicitly choose
+   publicly reachable ingress protected by the application token. The YAML does
+   not grant public invocation. Shared dashboard credentials are for a trusted
+   demo audience; replace them with organization identity before multi-user use.
+7. Verify unauthenticated dashboard/API rejection, readiness, hashes after restart,
+   all page reads, secret rotation and read-only write denial in the actual cloud.
+   Recheck an altered artifact produces 409, and BLOCK still rejects a direct API
+   scenario request. Only then connect the final dashboard URL.
+
+The YAML follows the official [Cloud Run service/job schema](https://docs.cloud.google.com/run/docs/reference/yaml/v1)
+and [Cloud Storage mount configuration](https://docs.cloud.google.com/run/docs/configuring/services/cloud-storage-volume-mounts).
+Cloud Storage FUSE is a filesystem compatibility choice to reuse current verified
+artifact readers. It is not a transactional filesystem. Test NetCDF/Parquet writes,
+read-after-close, permissions, memory and persistence with actual jobs before
+allowing writes in a deployed service. Unique run directories and PostgreSQL job
+claims remain required. Revisit a direct object-store adapter if these compatibility
+or performance checks fail. The current read-only cloud template does not claim
+that concurrent training/evaluation writes to a bucket have been verified.
+
+For writable private exploration, enable API and bucket writes together after
+verification. Use `decisionguard train --experiment-id UUID`, `evaluate
+--model-run-id UUID`, or `optimize --scenario-id UUID` as the job command/arguments,
+with the same database/root and the appropriate image target. Jobs have one task
+and no automatic retries: a killed RUNNING job requires operator investigation;
+there is no lease recovery or background queue consumer. Do not expose heavy job
+execution as a public HTTP request. Live optimization remains subject to current
+release and stability checks, even for authenticated operators.
+
+### Security and operational boundaries
+
+| Boundary / threat | Control | Remaining limit |
+| --- | --- | --- |
+| Anonymous data access or expensive writes | Dashboard Basic authentication; API constant-time bearer validation; production credentials required; read-only public-demo default | Shared workspace identity, no tenant isolation/RBAC/rate limiter. Use identity-aware ingress for wider access. |
+| Cross-site or arbitrary upstream requests | Same-origin write check, fixed server backend, path allowlist, JSON-only 32 KiB writes, redirect rejection and timeout | Do not expose the unprotected local mode outside loopback. |
+| Credentials reaching the browser | Server-only environment variables; incoming cookies/authorization are not forwarded upstream | Rotate both dashboard and backend credentials; protect deployment account access. |
+| Untrusted campaign strings / prompt injection | React text rendering; canvas chart tooltips; seven allowlisted agent tools; no shell/code or upstream expression loader | No live-provider evaluation is claimed. |
+| Changed or stale scientific evidence | Registered hashes plus verified artifacts; newest evaluation governs; server rechecks scenario bounds and release | An operator controlling both DB and artifacts can rewrite history; protect backups and storage IAM. |
+| Duplicate execution / interrupted jobs | PostgreSQL transactional claims; immutable per-run paths; explicit QUEUED/RUNNING/FAILED states | No automatic recovery of killed jobs; orphaned unpublished artifact paths can remain after failure. |
+| Misleading uncertainty or false release | Original units and posterior intervals; missing remains missing; predictive fit separate from release; BLOCK cannot be overridden | Synthetic data, conditional predictions and prototype stability threshold limit commercial conclusions. |
+
+API logs contain generated correlation IDs, route templates, status and duration,
+not request bodies, bearer tokens or dataset contents. Browser requests abort on
+selection changes and old response keys cannot replace current evidence. Scenario
+inputs clear on model changes; changed constraints invalidate the prior review.
+Heavy work is queued, and timeout messages tell users to inspect run history before
+retrying a write. Basic authentication requires HTTPS when deployed.
+
+### Phase 9–10 change review
+
+- Summary: real-evidence dashboard plus local deployment handoff; shared comparison
+  logic avoids duplicating agent/backend science. The true demo remains BLOCK.
+- Blockers: none identified for native local use. Cloud release is intentionally
+  pending account setup, container builds and deployed storage/job verification.
+- Major issues: none remaining in the completed local slice. Organization identity,
+  tenant authorization, job recovery and production load testing remain explicit
+  boundaries before offering a wider multi-user service.
+- Minor issues: evidence hashing can dominate latency on remote storage. Run
+  timestamps for imported artifacts report registration rather than invented fit
+  times. The optional conversational provider stays disabled.
+- What is good: source-bound metrics, preserved uncertainty, current release checks,
+  protected proxy, model-switch state isolation, real PostgreSQL and browser tests.
+- Simplification opportunities: keep one chart library and existing CLI execution;
+  avoid a second analytical cache, agent framework or speculative job orchestrator.
+- Verification: 324 Python tests passed, one optional test skipped; strict Pyright
+  and Ruff passed. Eight Chrome browser tests passed, including real artifacts on
+  desktop/mobile, backend failure, stale response handling, scenario review, access
+  control and proxy rejection. Next.js production build and TypeScript passed;
+  Compose configuration validates. Docker image execution and cloud deployment
+  were not run because the daemon/accounts are not available.

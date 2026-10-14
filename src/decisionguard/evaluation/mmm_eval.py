@@ -44,7 +44,12 @@ from decisionguard.models.artifacts import (
     roi_sensitivity,
     validate_prior_sources,
 )
-from decisionguard.models.bayesian import MMMConfig, build_mmm, posterior_diagnostics
+from decisionguard.models.bayesian import (
+    MMMConfig,
+    build_mmm,
+    posterior_diagnostics,
+    prior_specification,
+)
 
 
 class FoldSafePyMCAdapter(cast(Any, PyMCAdapter)):  # pyright: ignore[reportUntypedBaseClass]
@@ -132,6 +137,14 @@ class FoldSafePyMCAdapter(cast(Any, PyMCAdapter)):  # pyright: ignore[reportUnty
         return FoldSafePyMCAdapter(created.config, self.arrivals, self.ledger)
 
 
+def _fit_config(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in record["config"].items()
+        if key not in ("sampler", "cores")
+    }
+
+
 def evaluate_mmm(
     model_run: Path,
     sensitivity_run: Path,
@@ -148,13 +161,7 @@ def evaluate_mmm(
     code_hash_at_start = source_code_hash()
     model_record = load_mmm_record(model_run)
     alternative = load_mmm_record(sensitivity_run)
-    config = MMMConfig(
-        **{
-            key: value
-            for key, value in model_record["config"].items()
-            if key not in ("sampler", "cores")
-        }
-    )
+    config = MMMConfig(**_fit_config(model_record))
     config = replace(
         config,
         draws=config.draws if draws is None else draws,
@@ -172,6 +179,14 @@ def evaluate_mmm(
     data["trend"] = np.arange(len(data), dtype=np.float64)
     data["response"] = data["revenue"]
     model = build_mmm(config)
+    for source, built in (
+        (model_record, model),
+        (alternative, build_mmm(MMMConfig(**_fit_config(alternative)))),
+    ):
+        if source.get("priors") != prior_specification(built):
+            raise ValueError(
+                "model priors differ from the current specification; retrain first"
+            )
     # Upstream from_model_object filters extra sampler kwargs: construct then
     # extend the validated schema explicitly so Nutpie/depth settings survive.
     upstream_config = cast(Any, PyMCConfig).from_model_object(

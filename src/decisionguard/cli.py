@@ -22,6 +22,11 @@ def _config_arguments(
 def main() -> None:
     parser = argparse.ArgumentParser(prog="decisionguard")
     commands = parser.add_subparsers(dest="command", required=True)
+    demo = commands.add_parser(
+        "seed-demo", help="Register seeded, genuine demo evidence"
+    )
+    for name in ("dataset", "model", "sensitivity", "evaluation"):
+        demo.add_argument(f"--{name}", type=Path)
     prepare = commands.add_parser(
         "prepare-data", help="Generate, corrupt, validate, and persist a dataset"
     )
@@ -134,6 +139,22 @@ def main() -> None:
         )
     args = parser.parse_args()
     try:
+        if args.command == "seed-demo":
+            from decisionguard.config import Settings
+            from decisionguard.demo import seed_demo
+
+            print(
+                json.dumps(
+                    seed_demo(
+                        Settings.from_environment(),
+                        dataset=args.dataset,
+                        model=args.model,
+                        sensitivity=args.sensitivity,
+                        evaluation=args.evaluation,
+                    )
+                )
+            )
+            return
         if args.command == "optimize":
             if args.scenario_id is not None:
                 from decisionguard.api.jobs import optimize_scenario

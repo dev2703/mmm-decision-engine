@@ -1,0 +1,55 @@
+# Separate one-task job. Replace placeholders; select api or evaluation image.
+# Default command only migrates metadata. Override command/args for registered jobs.
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: decisionguard-job
+  namespace: PROJECT_NUMBER
+  labels:
+    cloud.googleapis.com/location: REGION
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/cloudsql-instances: CLOUD_SQL_INSTANCE
+    spec:
+      parallelism: 1
+      taskCount: 1
+      template:
+        spec:
+          serviceAccountName: JOB_SERVICE_ACCOUNT_EMAIL
+          maxRetries: 0
+          timeoutSeconds: "86400"
+          containers:
+            - image: IMAGE_DIGEST
+              command: [alembic]
+              args: [upgrade, head]
+              resources:
+                limits:
+                  cpu: "4"
+                  memory: 16Gi
+              env:
+                - name: APP_ENV
+                  value: production
+                - name: ARTIFACT_ROOT
+                  value: /artifacts
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: decisionguard-database-url
+                      key: "1"
+                - name: API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: decisionguard-api-token
+                      key: "1"
+              volumeMounts:
+                - name: artifacts
+                  mountPath: /artifacts
+          volumes:
+            - name: artifacts
+              csi:
+                driver: gcsfuse.run.googleapis.com
+                readOnly: false
+                volumeAttributes:
+                  bucketName: ARTIFACT_BUCKET

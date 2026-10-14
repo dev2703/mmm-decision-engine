@@ -69,7 +69,9 @@ def build_mmm(config: MMMConfig) -> Any:
                     sigma=config.media_prior_sigma,
                     dims="channel",
                 ),
-                "lam": prior("HalfNormal", sigma=1, dims="channel"),
+                # Unnormalized carryover reaches 1/(1 - decay) weeks of spend, so
+                # half-saturation can be several times max weekly scaled spend.
+                "lam": prior("HalfNormal", sigma=3, dims="channel"),
             }
         ),
         model_config={
@@ -79,6 +81,12 @@ def build_mmm(config: MMMConfig) -> Any:
             "likelihood": prior("Normal", sigma=prior("HalfNormal", sigma=0.05)),
         },
     )
+
+
+def prior_specification(model: Any) -> dict[str, object]:
+    """JSON-comparable priors; refits must reuse the priors of the fitted model."""
+    priors = {name: value.to_dict() for name, value in model.model_config.items()}
+    return json.loads(json.dumps(priors))
 
 
 def posterior_diagnostics(idata: Any) -> dict[str, object]:
@@ -145,6 +153,8 @@ def train_mmm(
         raise ValueError("training records unavailable at holdout origin")
     y = data["revenue"].to_numpy(dtype=np.float64)
     model = build_mmm(config)
+    # Building adds data dims to priors; record the specification evaluation rebuilds.
+    priors = prior_specification(model)
     model.build_model(x.iloc[:train_rows], y[:train_rows])
     model.sample_prior_predictive(
         x.iloc[:train_rows],
@@ -306,6 +316,7 @@ def train_mmm(
         "model_status": "CANDIDATE_UNEVALUATED",
         "prediction_context": "conditional_on_realized_covariates",
         "config": {**asdict(config), "sampler": "nutpie", "cores": 1},
+        "priors": priors,
         "hypothesis": "Test predictive structure and signed control recovery",
         "decision": "candidate_requires_external_evaluation",
         "response_curve_axis": "adstocked_spend_AUD; conditional saturation response",

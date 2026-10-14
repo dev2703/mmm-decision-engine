@@ -9,7 +9,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from decisionguard.agent.contracts import (
@@ -19,6 +19,7 @@ from decisionguard.agent.contracts import (
     ToolName,
     ToolResult,
 )
+from decisionguard.api.comparison import model_comparison
 from decisionguard.api.database import (
     Dataset,
     Experiment,
@@ -27,7 +28,6 @@ from decisionguard.api.database import (
     Project,
     Scenario,
 )
-from decisionguard.api.evaluations import load_registered_model
 from decisionguard.api.scenarios import ScenarioCreate
 
 
@@ -246,67 +246,13 @@ class AgentTools:
         )
 
     def _compare(self, args: CompareArguments) -> Evidence:
-        with self.sessions() as session:
-            selection = (
-                select(ModelRun)
-                .join(Experiment)
-                .where(Experiment.project_id == self.query.project_id)
-            )
-            total = session.scalar(
-                select(func.count()).select_from(selection.subquery())
-            )
-            models = session.scalars(
-                selection.order_by(ModelRun.created_at.desc(), ModelRun.id.desc())
-                .offset(args.offset)
-                .limit(args.limit)
-            ).all()
-            items: list[dict[str, Any]] = []
-            for model in models:
-                record = (
-                    load_registered_model(model, self.root)
-                    if model.status == "SUCCEEDED"
-                    else None
-                )
-                if record is not None:
-                    dataset = session.get(Dataset, model.dataset_id)
-                    if dataset is None or dataset.hash != record["dataset"]["hash"]:
-                        raise HTTPException(409, "Dataset differs from registration")
-                items.append(
-                    {
-                        "model_run_id": str(model.id),
-                        "dataset_id": str(model.dataset_id),
-                        "job_status": model.status,
-                        "model_record_hash": model.record_hash,
-                        "training_window": record["training_window"]
-                        if record
-                        else None,
-                        "dataset_hash": record["dataset"]["hash"] if record else None,
-                        "configuration": record["config"]
-                        if record
-                        else model.configuration,
-                        "prediction_context": record.get("prediction_context")
-                        if record
-                        else None,
-                        "posterior_predictive": record.get("posterior_predictive")
-                        if record
-                        else None,
-                        "limitations": record.get("limitations", []) if record else [],
-                        "health_url": f"/model-runs/{model.id}/health",
-                    }
-                )
         return Evidence(
-            source=f"/projects/{self.query.project_id}/model-runs",
-            data={
-                "items": items,
-                "total": total,
-                "offset": args.offset,
-                "next_offset": args.offset + len(items)
-                if total is not None and args.offset + len(items) < total
-                else None,
-                "ranking": (
-                    "not_performed; compare matching data, windows "
-                    "and prediction context"
-                ),
-                "decision_use": "requires_current_health_and_scenario_validation",
-            },
+            source=f"/projects/{self.query.project_id}/model-comparison",
+            data=model_comparison(
+                self.sessions,
+                self.root,
+                self.query.project_id,
+                offset=args.offset,
+                limit=args.limit,
+            ),
         )

@@ -13,6 +13,7 @@ from decisionguard.models.bayesian import (
     MMMConfig,
     build_mmm,
     prepare_mmm_inputs,
+    prior_specification,
     train_mmm,
 )
 
@@ -54,10 +55,12 @@ def test_fast_mmm_build_sample_and_reload_preserve_real_posterior(
 ) -> None:
     directory = tmp_path / "data"
     write_dataset(generate_dataset(SyntheticConfig(weeks=78)).observations, directory)
-    config = MMMConfig(draws=8, tune=16, chains=1, channels=("search_spend",))
+    config = MMMConfig(draws=8, tune=16, chains=1)
+    channels = len(config.channels)
     output = tmp_path / "mmm"
     record = train_mmm(directory, output, config)
     assert record["model_status"] == "CANDIDATE_UNEVALUATED"
+    assert record["priors"] == prior_specification(build_mmm(config))
     diagnostic = cast(dict[str, Any], record["diagnostics"])
     assert diagnostic["diagnostic_status"] == "INCOMPLETE"
     from pymc_marketing.mmm import MMM
@@ -78,10 +81,10 @@ def test_fast_mmm_build_sample_and_reload_preserve_real_posterior(
         .max(),
     )
     archive = np.load(output / "channel_draws.npz", allow_pickle=False)
-    assert archive["contributions"].shape == (1, 8, 65, 1)
+    assert archive["contributions"].shape == (1, 8, 65, channels)
     assert archive["holdout"].shape == (1, 8, 13)
     assert np.isfinite(archive["roi"]).all()
-    assert archive["saturation_response"].shape == (1, 8, 100, 1)
+    assert archive["saturation_response"].shape == (1, 8, 100, channels)
     assert (np.diff(archive["saturation_response"], axis=2) >= 0).all()
     model = build_mmm(config)
     assert model.control_columns == [

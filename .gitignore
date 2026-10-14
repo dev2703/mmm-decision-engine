@@ -47,3 +47,15 @@ ssh
 
 # Generated local dataset and experiment artifacts.
 /artifacts/
+
+# Frontend build and browser test outputs.
+web/node_modules/
+web/.next/
+web/out/
+web/playwright-report/
+web/test-results/
+web/*.tsbuildinfo
+
+# Tracked setup templates contain placeholders only.
+!.env.example
+!web/.env.example

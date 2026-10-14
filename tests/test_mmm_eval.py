@@ -103,21 +103,24 @@ def test_invalid_sampling_overrides_fail_before_loading_data(
     assert not (tmp_path / "output").exists()
 
 
-def test_interrupted_evaluation_resumes_without_repeating_completed_test(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Any,
-) -> None:
+def registered_pair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, data: pd.DataFrame
+) -> tuple[Any, Any, dict[str, Any]]:
     from copy import deepcopy
-    from dataclasses import asdict
+    from dataclasses import asdict, replace
 
-    from decisionguard.models.bayesian import MMMConfig
+    from decisionguard.models.bayesian import (
+        MMMConfig,
+        build_mmm,
+        prior_specification,
+    )
 
-    data = observations()
     model = tmp_path / "model"
     alternative = tmp_path / "alternative"
     for path in (model, alternative):
         path.mkdir()
         (path / "model.json").write_text("unit fixture")
+    config = MMMConfig()
     first: dict[str, Any] = {
         "dataset": {
             "hash": bridge.dataset_hash(data),
@@ -125,12 +128,16 @@ def test_interrupted_evaluation_resumes_without_repeating_completed_test(
             "quality_status": "RESOLVED",
         },
         "training_window": {"rows": len(data)},
-        "config": asdict(MMMConfig()),
-        "channels": {c: {"roi_mean": 1.0} for c in MMMConfig().channels},
+        "config": asdict(config),
+        "priors": prior_specification(build_mmm(config)),
+        "channels": {c: {"roi_mean": 1.0} for c in config.channels},
         "diagnostics": {"diagnostic_status": "ACCEPTABLE"},
     }
     second = deepcopy(first)
     second["config"]["media_prior_mean"] = 0.25
+    second["priors"] = prior_specification(
+        build_mmm(replace(config, media_prior_mean=0.25))
+    )
 
     def load_record(path: Any) -> dict[str, Any]:
         return first if path == model else second
@@ -140,6 +147,28 @@ def test_interrupted_evaluation_resumes_without_repeating_completed_test(
 
     monkeypatch.setattr(bridge, "load_mmm_record", load_record)
     monkeypatch.setattr(bridge, "load_model_inputs", load_inputs)
+    return model, alternative, first
+
+
+def test_model_trained_with_other_priors_cannot_be_refit_by_evaluation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    model, alternative, first = registered_pair(monkeypatch, tmp_path, observations())
+    first["priors"]["saturation_lam"]["kwargs"]["sigma"] = 1
+    with pytest.raises(ValueError, match="priors differ"):
+        bridge.evaluate_mmm(model, alternative, tmp_path / "evaluation")
+    del first["priors"]
+    with pytest.raises(ValueError, match="priors differ"):
+        bridge.evaluate_mmm(model, alternative, tmp_path / "evaluation")
+    assert not (tmp_path / "evaluation").exists()
+
+
+def test_interrupted_evaluation_resumes_without_repeating_completed_test(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    data = observations()
+    model, alternative, _ = registered_pair(monkeypatch, tmp_path, data)
     calls: list[str] = []
     interrupted = False
 
